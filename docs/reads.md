@@ -116,7 +116,7 @@ Drill in:
 Activity rules:
 - Always shows the **newest 10** entries from the changelog (never more).
 - `description` changes always render as `description: updated` / `description: set` / `description: cleared` (body never shown).
-- `Comment`, `environment`, `summary` changes are truncated to 120 chars per side.
+- `Comment` changes where both sides are empty (the common case — Jira changelog omits comment bodies) render as `Comment: added`. When bodies are present, they are truncated to 120 chars per side. `environment`, `summary` changes are truncated to 120 chars per side.
 - All other fields (status, assignee, fix version, labels, etc.) are shown in full.
 - Status regressions (moves to a lower `statusCategory`) are marked with `↩`.
 - `Rank_` field changes are always suppressed.
@@ -381,7 +381,8 @@ Paginated changelog for an issue.
 
 Field rendering rules (same as `show` activity):
 - `description` changes always render as `description: updated` / `set` / `cleared` (body never shown).
-- `Comment`, `environment`, `summary` changes are truncated to 120 chars per side.
+- `Comment` changes where both sides are empty (the common case — Jira changelog omits comment bodies) render as `Comment: added`. When bodies are present, they are truncated to 120 chars per side.
+- `environment`, `summary` changes are truncated to 120 chars per side.
 - All other fields are shown in full.
 - `↩` marks a status regression (move to a lower `statusCategory` than the previous state).
 - `Rank_` entries are suppressed unless `--include-rank`.

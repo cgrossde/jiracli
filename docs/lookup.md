@@ -51,6 +51,8 @@ Searches for Jira users by display name, username, or email.
 Without `--project`: calls `/user/search?query=<q>&maxResults=N`.
 With `--project`: calls `/user/assignable/search?project=<KEY>&query=<q>&maxResults=N`.
 
+The Jira DC `query` parameter is a hint — the server may return a broader set regardless of its value. Results are always filtered client-side as a case-insensitive substring match against `username`, `displayName`, and `emailAddress`. Omitting `<query>` returns up to `--limit` users unfiltered.
+
 Same resolution engine used by `assign`.
 
 ### Plain-text output shape

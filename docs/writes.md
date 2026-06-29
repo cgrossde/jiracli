@@ -262,9 +262,10 @@ Priorities, link types, and assignees have no `--allow-new` override.
 ```
 
 ```
-[stderr] priority "Critical" is not in the WEB priority scheme.
-        Available: High, Medium, Low
-        List:    jiracli lookup priorities --project WEB
+[stderr] unknown priority "High" for project WEB
+        Available: 1 - Very High, 2 - High, 3 - Medium, 4 - Low
+        Run: jiracli lookup priorities --project WEB
+        Did you mean: 1 - Very High, 2 - High?
 [exit:1 | Xms]
 ```
 
