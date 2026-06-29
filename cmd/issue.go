@@ -226,8 +226,10 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 	// Backfill Epic summary — Epic Link returns only a key string, never a summary.
 	// Fail-soft: key remains populated even if the fetch fails.
 	if rec.Epic != nil && rec.Epic.Key != "" && rec.Epic.Summary == "" {
-		if epRaw, epErr := client.GetIssue(ctx, rec.Epic.Key, "summary", false); epErr == nil {
+		if epRaw, epErr := client.GetIssue(ctx, rec.Epic.Key, "summary,status,issuetype", false); epErr == nil {
 			rec.Epic.Summary = epRaw.Fields.Summary
+			rec.Epic.Status = epRaw.Fields.Status.Name
+			rec.Epic.StatusCategory = epRaw.Fields.Status.StatusCategory.Name
 		}
 	}
 
@@ -436,7 +438,9 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 
 	// Epic / Parent
 	if rec.Epic != nil {
-		if rec.Epic.Summary != "" {
+		if rec.Epic.Summary != "" && rec.Epic.Status != "" {
+			fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary, rec.Epic.Status)
+		} else if rec.Epic.Summary != "" {
 			fmt.Fprintf(&sb, "%s %s  %q\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary)
 		} else {
 			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Epic:"), rec.Epic.Key)
@@ -444,7 +448,13 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 	if rec.Parent != nil {
-		fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary, rec.Parent.Status)
+		if rec.Parent.Summary != "" && rec.Parent.Status != "" {
+			fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary, rec.Parent.Status)
+		} else if rec.Parent.Summary != "" {
+			fmt.Fprintf(&sb, "%s %s  %q\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary)
+		} else {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Parent:"), rec.Parent.Key)
+		}
 		sb.WriteByte('\n')
 	}
 	if rec.Portfolio != nil {

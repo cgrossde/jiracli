@@ -123,7 +123,7 @@ func BuildHierarchy(
 		// This avoids firing the JQL on Stories, Bugs, Tasks, etc. that simply have
 		// no portfolio parent of their own.
 		if portfolioFieldName != "" && isPortfolioTypeLevel(subject.IssueType) {
-			jql := `"` + portfolioFieldName + `" = ` + key
+			jql := `"` + portfolioFieldName + `" ~ "` + key + `"`
 			resp, err := c.Search(ctx, jql, 1, 100, childFields)
 			if err != nil {
 				childrenError = err.Error()

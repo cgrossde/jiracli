@@ -61,6 +61,12 @@ type IssueRaw struct {
 				IssueType struct {
 					Name string `json:"name"`
 				} `json:"issuetype"`
+				Status struct {
+					Name           string `json:"name"`
+					StatusCategory struct {
+						Name string `json:"name"`
+					} `json:"statusCategory"`
+				} `json:"status"`
 			} `json:"fields"`
 		} `json:"parent"`
 		IssueLinks []struct {
@@ -275,11 +281,6 @@ type ActivityRecord struct {
 	Changes []HistoryChangeRecord `json:"changes"`
 }
 
-// EpicRef holds the key and summary of an epic parent.
-type EpicRef struct {
-	Key     string `json:"key"`
-	Summary string `json:"summary"`
-}
 
 // ChildIssueRecord is a compact child issue reference (subtask or epic child).
 type ChildIssueRecord struct {
@@ -309,7 +310,7 @@ type IssueRecord struct {
 	Components       []string           `json:"components"`
 	FixVersions      []string           `json:"fixVersions"`
 	Parent           *IssueSummary      `json:"parent"`
-	Epic             *EpicRef           `json:"epic"`
+	Epic             *IssueSummary      `json:"epic"`
 	Portfolio        *IssueSummary      `json:"portfolio,omitempty"`
 	Links            []IssueLinkRecord  `json:"links"`
 	Attachments      []AttachmentRecord `json:"attachments"`
@@ -429,7 +430,12 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 	if f.Parent != nil {
 		parentType := strings.ToLower(f.Parent.Fields.IssueType.Name)
 		if parentType == "epic" {
-			rec.Epic = &EpicRef{Key: f.Parent.Key, Summary: f.Parent.Fields.Summary}
+			rec.Epic = &IssueSummary{
+				Key:            f.Parent.Key,
+				Summary:        f.Parent.Fields.Summary,
+				Status:         f.Parent.Fields.Status.Name,
+				StatusCategory: f.Parent.Fields.Status.StatusCategory.Name,
+			}
 		} else {
 			rec.Parent = &IssueSummary{
 				Key:     f.Parent.Key,
@@ -440,7 +446,7 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 	// Epic from configured custom field (instance-specific ID, e.g. customfield_10100).
 	if rec.Epic == nil && hf.EpicLink != "" {
 		if epicKey := ExtractRawKey(raw.RawFields, hf.EpicLink); epicKey != "" {
-			rec.Epic = &EpicRef{Key: epicKey}
+			rec.Epic = &IssueSummary{Key: epicKey}
 		}
 	}
 	// Portfolio (e.g. Initiative Link). Stored as key-only; caller may resolve summary.

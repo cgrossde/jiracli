@@ -32,7 +32,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
   "components":      ["Login"],
   "fixVersions":     ["4.5.0"],
   "parent":          { "key": "ACME-100", "summary": "Auth epic", "status": "In Progress", "statusCategory": "In Progress" },
-  "epic":            { "key": "ACME-100", "summary": "Auth epic" },
+  "epic":            { "key": "ACME-100", "summary": "Auth epic", "status": "Open", "statusCategory": "To Do" },
   "portfolio":       { "key": "ACME-50", "summary": "Modernise authentication platform", "status": "Open", "statusCategory": "To Do" },
   "links": [
     {
