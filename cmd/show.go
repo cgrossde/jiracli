@@ -42,8 +42,10 @@ Subcommands drill into a specific facet by plain key:
 
 Common flags (on the default issue view):
   --json                  NDJSON output
-  --fields <spec>         Add/drop fields from the default set (e.g.
-                          "description,reporter" to add, "-priority" to drop)
+  --fields <spec>         Add/drop fields. Syntax: "name" or "+name" to add,
+                          "-name" to drop. Standard names: reporter, description,
+                          labels, components, fixVersions, resolution, duedate,
+                          timeestimate, timespent. Any Jira field ID accepted.
   --fields-only <list>    Restrict to exactly this comma-separated list
                           (replaces defaults; mutex with --fields)
   --no-history            Omit activity/changelog section
@@ -98,7 +100,9 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 	root.Flags().BoolVar(&issueFlags.NoHistory, "no-history", false, "Skip activity/changelog section")
 	root.Flags().BoolVar(&issueFlags.NoComments, "no-comments", false, "Skip comments section")
 	root.Flags().IntVar(&issueFlags.CommentsN, "comments", 1, "Number of latest comments to preview (max 25)")
-	root.Flags().StringVar(&issueFlags.Fields, "fields", "", "Add/drop fields from the default set (e.g. \"description,reporter\" to add, \"-priority\" to drop)")
+	root.Flags().StringVar(&issueFlags.Fields, "fields", "", "Add/drop fields: \"name\" or \"+name\" to add, \"-name\" to drop. "+
+		"Standard names: reporter, description, labels, components, fixVersions, resolution, duedate, timeestimate, timespent. "+
+		"Any Jira field ID accepted. Run jiracli show --help for full reference.")
 	root.Flags().StringVar(&issueFlags.FieldsOnly, "fields-only", "", "Restrict to exactly this comma-separated list (replaces defaults; mutex with --fields)")
 	root.Flags().BoolVar(&issueFlags.NoChildren, "no-children", false, "Skip fetching the children list (one fewer API call)")
 	root.Flags().BoolVar(&issueFlags.Parent, "parent", false, "Show the parent of <KEY> instead (Parent Link → Parent → Epic Link, in that order)")

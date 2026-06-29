@@ -42,8 +42,11 @@ The output contains `→` drill-down hints for comments, history, and attachment
 jiracli search "project = PROJ AND priority = High"
 jiracli search "project = PROJ" --assigned
 jiracli search "project = PROJ" --exclude-done   # hide Done issues
+jiracli search --jql 'text ~ "KSP" AND project = CAR'  # --jql for queries with quoted literals
 ```
 All issues are returned by default, **including Done**. Use `--exclude-done` to hide them. The effective JQL is echoed on the first line — read it to confirm the query is what you intended.
+
+**Use `--jql` instead of positional args whenever the JQL contains quoted string literals** (e.g. `text ~ "term"`, `summary ~ "foo bar"`). Shell quoting can mangle the joined positional args; `--jql` passes the entire query as one string and bypasses the join entirely. `--jql` and positional JQL args are mutually exclusive.
 
 ### Transition, assign, edit fields
 ```sh

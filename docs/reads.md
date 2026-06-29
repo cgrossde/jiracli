@@ -54,7 +54,28 @@ When a hierarchy configuration exists for the profile (set via `setup` or `confi
 - **Mixed:** `--fields "timetracking,-priority"`.
 - **Restrict to a fixed set:** `--fields-only "key,summary,description"` — fetches and renders exactly those fields. Mutually exclusive with `--fields`.
 
-Field names match Jira's own field IDs as returned by `jiracli lookup fields`. Custom fields accepted by name (`team`) or id (`customfield_10031`).
+Field names match Jira's own field IDs. Standard names usable with `--fields`:
+
+| Name | Label shown | Notes |
+|---|---|---|
+| `summary` | — | Always included |
+| `status` | — | Always included |
+| `issuetype` | — | Always included |
+| `priority` | `Prio` | Drop with `-priority` |
+| `assignee` | `Assignee` | Drop with `-assignee` |
+| `reporter` | `Reporter` | Add with `reporter` |
+| `created` | `Created` | Add with `created` |
+| `updated` | `Updated` | Add with `updated` |
+| `description` | `Description` | Add with `description` |
+| `labels` | `Labels` | Always fetched |
+| `components` | `Components` | Always fetched |
+| `fixVersions` | `Fix Versions` | Add with `fixVersions` |
+| `resolution` | `Resolution` | Add with `resolution` |
+| `duedate` | `Due` | Add with `duedate` |
+| `timeestimate` | `Remaining` | Add with `timeestimate`; formatted as `2h30m` |
+| `timeoriginalestimate` | `Estimate` | Add with `timeoriginalestimate` |
+| `timespent` | `Spent` | Add with `timespent` |
+| `customfield_XXXXX` | raw ID | Any custom field ID from `jiracli lookup fields` |
 
 ### Plain-text output shape
 
@@ -188,18 +209,25 @@ Single object (v1 schema, additive-only):
 
 ---
 
-## `search <jql...>`
+## `search [<jql...>]`
 
 JQL search — all issues returned by default, including Done.
 
-    jiracli search <jql...> [flags]
+    jiracli search [<jql...>] [flags]
+    jiracli search --jql '<full JQL query>' [flags]
 
-Multiple positional arguments are joined with a space. JQL should be quoted to avoid shell interpretation.
+Positional arguments are joined with a space to form the JQL query. When the
+query contains quoted string literals (e.g. `text ~ "KSP"`), shell quoting can
+mangle the join. Use `--jql` to pass the entire query as one shell argument,
+bypassing the join:
+
+    jiracli search --jql 'text ~ "KSP" AND project = CAR ORDER BY updated DESC'
 
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
+| `--jql <query>` | — | Entire JQL query as one string — bypasses arg joining; mutually exclusive with positional args |
 | `--limit N` | 50 | Results per page (max 100) |
 | `--page N` | 1 | Page number, 1-indexed |
 | `--exclude-done` | false | Exclude issues in the Done status category |
@@ -216,18 +244,29 @@ All issues are returned by default, **including Done**. Use `--exclude-done` to 
 
 The effective JQL is always echoed on the first line of plain-text output. `statusCategory` values are universal: `"To Do"`, `"In Progress"`, `"Done"`.
 
-### Default columns
+### Columns and `--fields` reference
 
-`key, status, type, priority, assignee, updated, summary`
+Default columns: `key, status, issuetype, priority, assignee, updated, summary`
 
-`--fields` adds to the default columns:
-- `--fields "description"` — adds a third line per result: a single-line, ~100-character wiki-markup-stripped preview.
-- `--fields "timeestimate,resolution"` — adds a fourth line per result showing those fields with their labels (`Remaining: —  Resolution: —`). Any field beyond the default set that is not `description` appears here, always emitted (showing `—` when the field is null/unset on that issue).
-- Combine freely: `--fields "description,resolution,reporter"`.
+`--fields` adds to or drops from the default columns. Syntax: `"name"` or `"+name"` to add, `"-name"` to drop.
+
+| Name | Label shown | Notes |
+|---|---|---|
+| `description` | _(preview line)_ | Stripped wiki markup, ≤100 chars |
+| `reporter` | `Reporter` | Add with `reporter` |
+| `labels` | `Labels` | In default set |
+| `components` | `Components` | In default set |
+| `fixVersions` | `Fix Version` | Add with `fixVersions` |
+| `resolution` | `Resolution` | Add with `resolution` |
+| `duedate` | `Due` | Add with `duedate` |
+| `timeestimate` | `Remaining` | Formatted as `2h30m` |
+| `timeoriginalestimate` | `Estimate` | Formatted as `2h30m` |
+| `timespent` | `Spent` | Formatted as `2h30m` |
+| `customfield_XXXXX` | raw ID | Any field ID from `jiracli lookup fields` |
 
 `--fields-only "key,summary,description"` restricts to exactly those fields (mutex with `--fields`). `type` renders from `issueType`; the NDJSON field is `issueType`.
 
-**Known extra-field labels:** `resolution` → `Resolution`, `timeestimate` → `Remaining`, `timeoriginalestimate` → `Estimate`, `timespent` → `Spent`, `reporter` → `Reporter`, `fixVersions` → `Fix Version`, `duedate` → `Due`. Time values are formatted as `2h30m`. Unknown field IDs appear with the raw ID as the label.
+Unknown field IDs are accepted and displayed with the raw ID as the label, showing `—` when absent on an issue.
 
 ### Plain-text output shape
 
@@ -269,7 +308,7 @@ With any other extra field (e.g. `--fields "timeestimate,resolution"`), a furthe
 
     --- page 1 of 5 | next: jiracli search --page 2 --limit 50 "<jql>" ---
 
-The next-page command includes every active flag (`--exclude-done`, `--fields`, etc.) verbatim.
+The next-page command includes every active flag (`--exclude-done`, `--fields`, `--jql`, etc.) verbatim. When the JQL contains double-quotes, `~`, or parentheses, the next-page hint automatically uses `--jql` instead of a positional argument.
 
 ### NDJSON output (`--json`)
 

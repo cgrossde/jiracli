@@ -25,6 +25,7 @@ type SearchFlags struct {
 	FieldsOnly  string
 	Assigned    bool
 	Category    string
+	JQL         string // --jql: entire query as one string, bypasses arg joining
 }
 
 // defaultSearchFields is the default field set requested from the Jira API.
@@ -40,22 +41,43 @@ const updatedLayout = "2006-01-02T15:04:05.000-0700"
 func NewSearchCmd() *cobra.Command {
 	var flags SearchFlags
 	c := &cobra.Command{
-		Use:   "search <jql...>",
+		Use:   "search [<jql...>]",
 		Short: "Search Jira issues with JQL",
-		Long: `Search Jira issues using JQL. Multiple arguments are joined with a space.
+		Long: `Search Jira issues using JQL.
+
+Positional arguments are joined with a space to form the JQL query. When the
+query contains quoted string literals (e.g. text ~ "KSP"), shell quoting can
+break the join. Use --jql to pass the entire query as a single string and bypass
+the join entirely:
+
+  jiracli search --jql 'text ~ "KSP" AND project = CAR'
 
 All issues are returned by default, including Done. Use --exclude-done to hide
 issues in the "Done" status category (equivalent to adding
 statusCategory != "Done" to your query).
 
 Use --category to filter by status category (todo, in-progress, done, all).
-Use --assigned to restrict results to the current user.`,
+Use --assigned to restrict results to the current user.
+
+Fields reference (--fields / --fields-only):
+  Default columns: key, status, issuetype, priority, assignee, updated, summary
+  Standard extras: description, reporter, labels, components, fixVersions,
+                   resolution, duedate, timeestimate, timeoriginalestimate, timespent
+  Any Jira field ID (e.g. customfield_10031) is also accepted.
+  Syntax: "reporter" or "+reporter" to add, "-priority" to drop.
+  Use jiracli lookup fields to list all available field IDs.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !flags.Assigned && len(args) == 0 {
-				return fmt.Errorf("requires at least 1 arg (JQL), or use --assigned")
+			if flags.JQL != "" && len(args) > 0 {
+				return fmt.Errorf("--jql and positional JQL arguments are mutually exclusive")
 			}
-			jql := strings.Join(args, " ")
+			if !flags.Assigned && flags.JQL == "" && len(args) == 0 {
+				return fmt.Errorf("requires at least 1 arg (JQL), --jql <query>, or use --assigned")
+			}
+			jql := flags.JQL
+			if jql == "" {
+				jql = strings.Join(args, " ")
+			}
 			result, err := Search(cmd.Context(), flags, jql)
 			if err != nil {
 				return err
@@ -69,10 +91,13 @@ Use --assigned to restrict results to the current user.`,
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Maximum results per page (1-100)")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().BoolVar(&flags.ExcludeDone, "exclude-done", false, "Exclude issues in the Done status category")
-	c.Flags().StringVar(&flags.Fields, "fields", "", `Add/drop fields from the default set: "name" or "+name" to add, "-name" to drop`)
+	c.Flags().StringVar(&flags.Fields, "fields", "", "Add/drop display columns: \"name\" or \"+name\" to add, \"-name\" to drop. "+
+		"Standard names: description, reporter, labels, components, fixVersions, resolution, duedate, timeestimate, timespent. "+
+		"Any Jira field ID is also accepted. See --help for the full reference.")
 	c.Flags().StringVar(&flags.FieldsOnly, "fields-only", "", `Restrict fetched fields to exactly this comma-separated list (replaces defaults; mutually exclusive with --fields)`)
 	c.Flags().BoolVar(&flags.Assigned, "assigned", false, "Show only issues assigned to me")
 	c.Flags().StringVar(&flags.Category, "category", "", "Status category filter: todo, in-progress, done, all")
+	c.Flags().StringVar(&flags.JQL, "jql", "", "Entire JQL query as one string — bypasses positional-arg joining; safe for queries with quoted literals like text ~ \"KSP\"")
 	return c
 }
 
@@ -695,7 +720,14 @@ func buildNextPageCmd(jql string, nextPage, limit int, flags SearchFlags) string
 	if flags.Profile != "" {
 		parts = append(parts, fmt.Sprintf("--profile %s", flags.Profile))
 	}
-	parts = append(parts, fmt.Sprintf("%q", jql))
+	// Emit --jql when the original query came from that flag, or when the JQL
+	// contains characters (double-quotes, parens, ~) that are unsafe to pass as
+	// a bare positional argument.
+	if flags.JQL != "" || strings.ContainsAny(jql, `"~()`) {
+		parts = append(parts, fmt.Sprintf("--jql %q", jql))
+	} else {
+		parts = append(parts, fmt.Sprintf("%q", jql))
+	}
 	return strings.Join(parts, " ")
 }
 

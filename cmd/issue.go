@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -33,7 +34,20 @@ func NewIssueCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "show <KEY>",
 		Short: "Show a Jira issue",
-		Long:  "Fetch and display a single Jira issue. Accepts a bare key (ACME-123) or a browse URL.",
+		Long: `Fetch and display a single Jira issue. Accepts a bare key (ACME-123) or a browse URL.
+
+Fields reference (--fields / --fields-only):
+  Default set: key, summary, status, priority, issuetype, assignee, reporter,
+               description, labels, components, fixVersions, parent, created,
+               updated, links, attachments
+  Add a field:    --fields "reporter,duedate"  (or +reporter)
+  Drop a field:   --fields "-priority,-assignee"
+  Exact set:      --fields-only "key,summary,description"
+  Standard names: reporter, assignee, description, labels, components,
+                  fixVersions, resolution, duedate, created, updated,
+                  timeestimate, timeoriginalestimate, timespent
+  Any Jira field ID is also accepted (e.g. customfield_10031).
+  Use jiracli lookup fields to list all available field IDs.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.CommentsN > 25 {
@@ -52,7 +66,9 @@ func NewIssueCmd() *cobra.Command {
 	c.Flags().BoolVar(&flags.NoHistory, "no-history", false, "Skip activity/changelog section")
 	c.Flags().BoolVar(&flags.NoComments, "no-comments", false, "Skip comments section")
 	c.Flags().IntVar(&flags.CommentsN, "comments", 1, "Number of latest comments to preview (max 25)")
-	c.Flags().StringVar(&flags.Fields, "fields", "", "Add/drop fields from the default set (e.g. \"description,reporter\" to add, \"-priority\" to drop)")
+	c.Flags().StringVar(&flags.Fields, "fields", "", "Add/drop fields: \"name\" or \"+name\" to add, \"-name\" to drop. "+
+		"Standard names: reporter, description, labels, components, fixVersions, resolution, duedate, timeestimate, timespent. "+
+		"Any Jira field ID accepted. See --help for full reference.")
 	c.Flags().StringVar(&flags.FieldsOnly, "fields-only", "", "Restrict to exactly this comma-separated list (replaces defaults; mutually exclusive with --fields)")
 	c.Flags().BoolVar(&flags.NoChildren, "no-children", false, "Skip fetching the children list (one fewer API call)")
 	c.Flags().BoolVar(&flags.Parent, "parent", false, "Show the parent of <KEY> instead (Parent Link → Parent → Epic Link, in that order)")
@@ -142,53 +158,33 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 	}
 	rec := jira.ToIssueRecord(raw, commentsN, hf)
 
-	// Resolve FromCategory/ToCategory for status transitions in the activity
-	// timeline. Uses the cached status list — failure is non-fatal.
+	// All four enrichment calls are independent — run them concurrently.
+	// Each goroutine writes a disjoint field of rec; WaitGroup provides the barrier.
+	var wg sync.WaitGroup
+
+	// (1) Resolve status categories for the activity timeline.
 	if !flags.NoHistory && len(rec.ActivityTimeline) > 0 {
-		if statuses, sErr := client.ListStatuses(ctx, store, false); sErr == nil {
-			jira.ResolveActivityStatusCategories(rec.ActivityTimeline, statuses)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if statuses, sErr := client.ListStatuses(ctx, store, false); sErr == nil {
+				jira.ResolveActivityStatusCategories(rec.ActivityTimeline, statuses)
+			}
+		}()
 	}
 
-	// Backfill IssueType for linked issues via one bulk search.
-	// The issuelinks API payload does not include issuetype; fetch it cheaply.
-	if len(rec.Links) > 0 {
-		keys := make([]string, 0, len(rec.Links))
-		seen := make(map[string]bool, len(rec.Links))
-		for _, l := range rec.Links {
-			if l.Issue.Key != "" && !seen[l.Issue.Key] {
-				keys = append(keys, l.Issue.Key)
-				seen[l.Issue.Key] = true
-			}
-		}
-		if len(keys) > 0 {
-			quotedKeys := make([]string, len(keys))
-			for i, k := range keys {
-				quotedKeys[i] = `"` + k + `"`
-			}
-			bulkJQL := `key in (` + strings.Join(quotedKeys, ",") + `)`
-			if bulkResp, bulkErr := client.Search(ctx, bulkJQL, 1, len(keys), []string{"issuetype"}); bulkErr == nil {
-				typeByKey := make(map[string]string, len(bulkResp.Issues))
-				for _, issue := range bulkResp.Issues {
-					typeByKey[issue.Key] = issue.Fields.IssueType.Name
-				}
-				for i := range rec.Links {
-					if t, ok := typeByKey[rec.Links[i].Issue.Key]; ok {
-						rec.Links[i].Issue.IssueType = t
-					}
-				}
-			}
-		}
-	}
-
-	// Epic children: fetch via search if this is an Epic (subtasks come free from the raw response).
+	// (2) Epic children search (only when this issue is an Epic).
 	if !flags.NoChildren && strings.EqualFold(rec.IssueType, "Epic") {
-		epicJQL := `"Epic Link" = ` + parsed.Key
-		epicFields := []string{"summary", "status", "assignee", "issuetype", "priority", "updated"}
-		epicResp, epicErr := client.Search(ctx, epicJQL, 1, 100, epicFields)
-		if epicErr != nil {
-			rec.ChildrenError = epicErr.Error()
-		} else {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			epicJQL := `"Epic Link" = ` + parsed.Key
+			epicFields := []string{"summary", "status", "assignee", "issuetype", "priority", "updated"}
+			epicResp, epicErr := client.Search(ctx, epicJQL, 1, 100, epicFields)
+			if epicErr != nil {
+				rec.ChildrenError = epicErr.Error()
+				return
+			}
 			rec.ChildrenTotal = epicResp.Total
 			rec.Children = make([]jira.ChildIssueRecord, 0, len(epicResp.Issues))
 			for _, issue := range epicResp.Issues {
@@ -205,26 +201,34 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 					Assignee:       assignee,
 				})
 			}
-		}
+		}()
 	}
-	// Resolve Portfolio summary with a single extra fetch.
-	// Fail-soft: surface the key with empty summary on error rather than dropping it.
+
+	// (3) Portfolio summary — cached 1h TTL.
 	if rec.Portfolio != nil && rec.Portfolio.Key != "" && rec.Portfolio.Summary == "" {
-		if pfRaw, pfErr := client.GetIssue(ctx, rec.Portfolio.Key, "summary,status,issuetype", false); pfErr == nil {
-			rec.Portfolio.Summary = pfRaw.Fields.Summary
-			rec.Portfolio.Status = pfRaw.Fields.Status.Name
-			rec.Portfolio.StatusCategory = pfRaw.Fields.Status.StatusCategory.Name
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := client.GetIssueSummary(ctx, rec.Portfolio.Key, store)
+			rec.Portfolio.Summary = s.Summary
+			rec.Portfolio.Status = s.Status
+			rec.Portfolio.StatusCategory = s.StatusCategory
+		}()
 	}
-	// Backfill Epic summary — Epic Link returns only a key string, never a summary.
-	// Fail-soft: key remains populated even if the fetch fails.
+
+	// (4) Epic summary — Epic Link custom field returns only a key; cached 1h TTL.
 	if rec.Epic != nil && rec.Epic.Key != "" && rec.Epic.Summary == "" {
-		if epRaw, epErr := client.GetIssue(ctx, rec.Epic.Key, "summary,status,issuetype", false); epErr == nil {
-			rec.Epic.Summary = epRaw.Fields.Summary
-			rec.Epic.Status = epRaw.Fields.Status.Name
-			rec.Epic.StatusCategory = epRaw.Fields.Status.StatusCategory.Name
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := client.GetIssueSummary(ctx, rec.Epic.Key, store)
+			rec.Epic.Summary = s.Summary
+			rec.Epic.Status = s.Status
+			rec.Epic.StatusCategory = s.StatusCategory
+		}()
 	}
+
+	wg.Wait()
 
 	if flags.JSON {
 		data, err := json.Marshal(rec)
