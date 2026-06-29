@@ -381,6 +381,13 @@ func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL strin
 	sb.WriteByte('\n')
 
 	now := time.Now()
+	// Extra fields: requested fields beyond the default set (excluding "description" which has its own line).
+	var extraFields []string
+	for _, f := range fields {
+		if !containsStr(defaultSearchFields, f) && f != "description" {
+			extraFields = append(extraFields, f)
+		}
+	}
 	for i, raw := range resp.Issues {
 		n := startAt + i + 1
 		statusName := raw.Fields.Status.Name
@@ -408,6 +415,18 @@ func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL strin
 			if preview := descPreview(raw.Fields.Description); preview != "" {
 				fmt.Fprintf(&sb, "    %s\n", preview)
 			}
+		}
+		// Line 4 (optional): extra fields — always shown when requested, "—" when absent.
+		if len(extraFields) > 0 {
+			var parts []string
+			for _, f := range extraFields {
+				v := extractFieldValue(raw, f)
+				if v == "" {
+					v = "—"
+				}
+				parts = append(parts, fmt.Sprintf("%s: %s", fieldLabel(f), v))
+			}
+			fmt.Fprintf(&sb, "    %s\n", strings.Join(parts, "  "))
 		}
 		sb.WriteByte('\n')
 	}
@@ -440,6 +459,164 @@ func parseUpdated(raw string, now time.Time) string {
 		}
 	}
 	return jira.FormatRelative(t, now)
+}
+
+// fieldLabel converts a Jira field ID to a display label.
+// Falls back to a title-cased version of the ID when no explicit mapping exists.
+func fieldLabel(field string) string {
+	switch field {
+	case "resolution":
+		return "Resolution"
+	case "timeestimate":
+		return "Remaining"
+	case "timeoriginalestimate":
+		return "Estimate"
+	case "timespent":
+		return "Spent"
+	case "reporter":
+		return "Reporter"
+	case "fixVersions":
+		return "Fix Version"
+	case "labels":
+		return "Labels"
+	case "components":
+		return "Components"
+	case "duedate":
+		return "Due"
+	case "environment":
+		return "Env"
+	}
+	return field
+}
+
+// extractFieldValue returns a display string for a named field on an IssueRaw.
+// Returns "" when the field is absent, null, or has no meaningful value.
+// Handles typed Fields struct fields and falls back to RawFields for the rest.
+func extractFieldValue(raw jira.IssueRaw, field string) string {
+	switch field {
+	case "resolution":
+		if raw.Fields.Resolution != nil {
+			return raw.Fields.Resolution.Name
+		}
+		return ""
+	case "reporter":
+		if raw.Fields.Reporter != nil {
+			return raw.Fields.Reporter.DisplayName
+		}
+		return ""
+	case "fixVersions":
+		names := make([]string, 0, len(raw.Fields.FixVersions))
+		for _, fv := range raw.Fields.FixVersions {
+			names = append(names, fv.Name)
+		}
+		return strings.Join(names, ", ")
+	case "labels":
+		return strings.Join(raw.Fields.Labels, ", ")
+	case "components":
+		names := make([]string, 0, len(raw.Fields.Components))
+		for _, c := range raw.Fields.Components {
+			names = append(names, c.Name)
+		}
+		return strings.Join(names, ", ")
+	case "priority":
+		if raw.Fields.Priority != nil {
+			return raw.Fields.Priority.Name
+		}
+		return ""
+	case "assignee":
+		if raw.Fields.Assignee != nil {
+			return raw.Fields.Assignee.DisplayName
+		}
+		return ""
+	case "status":
+		return raw.Fields.Status.Name
+	case "issuetype":
+		return raw.Fields.IssueType.Name
+	case "summary":
+		return raw.Fields.Summary
+	case "description":
+		return "" // rendered separately
+	}
+
+	// Fall back to RawFields for any untyped field (e.g. timeestimate, duedate).
+	v, ok := raw.RawFields[field]
+	if !ok || string(v) == "null" || string(v) == `""` {
+		return ""
+	}
+
+	// Integer: Jira time fields are seconds — format as hours/minutes.
+	var n int64
+	if json.Unmarshal(v, &n) == nil {
+		return formatSeconds(n)
+	}
+
+	// Plain string.
+	var s string
+	if json.Unmarshal(v, &s) == nil {
+		return s
+	}
+
+	// Object with a "name" field (e.g. version, component, user).
+	var obj struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"displayName"`
+		Value       string `json:"value"`
+	}
+	if json.Unmarshal(v, &obj) == nil {
+		if obj.DisplayName != "" {
+			return obj.DisplayName
+		}
+		if obj.Name != "" {
+			return obj.Name
+		}
+		if obj.Value != "" {
+			return obj.Value
+		}
+	}
+
+	// Array: collect "name" or "displayName" strings.
+	var arr []json.RawMessage
+	if json.Unmarshal(v, &arr) == nil && len(arr) > 0 {
+		var names []string
+		for _, item := range arr {
+			var o struct {
+				Name        string `json:"name"`
+				DisplayName string `json:"displayName"`
+			}
+			if json.Unmarshal(item, &o) == nil {
+				if o.Name != "" {
+					names = append(names, o.Name)
+				} else if o.DisplayName != "" {
+					names = append(names, o.DisplayName)
+				}
+			} else {
+				var s string
+				if json.Unmarshal(item, &s) == nil && s != "" {
+					names = append(names, s)
+				}
+			}
+		}
+		return strings.Join(names, ", ")
+	}
+
+	return ""
+}
+
+// formatSeconds converts a Jira time-in-seconds value to a human-readable string.
+// Jira stores time in seconds; typical granularity is 1h = 3600s.
+func formatSeconds(secs int64) string {
+	if secs <= 0 {
+		return ""
+	}
+	h := secs / 3600
+	m := (secs % 3600) / 60
+	if h > 0 && m > 0 {
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	if h > 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 const descPreviewLen = 100

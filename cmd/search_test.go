@@ -274,19 +274,21 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 		}
 	})
 
-	// Case 3: description,reporter,fixVersions added — plain text only shows description.
-	t.Run("multi-add: only description renders in plain output", func(t *testing.T) {
+	// Case 3: description,reporter,fixVersions added — description preview AND extra-fields line rendered.
+	t.Run("multi-add: description preview + extra fields line rendered", func(t *testing.T) {
 		fields := append(defaultSearchFieldsCopy(), "description", "reporter", "fixVersions")
 		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(out, "reporter:") || strings.Contains(out, "Reporter:") {
-			t.Error("reporter should not be rendered in plain-text output")
+		// Extra fields line must appear (always emitted when extra fields requested).
+		if !strings.Contains(out, "Reporter:") {
+			t.Error("Reporter label should appear in extra-fields line")
 		}
-		if strings.Contains(out, "fixVersions") {
-			t.Error("fixVersions should not be rendered in plain-text output")
+		if !strings.Contains(out, "Fix Version:") {
+			t.Error("Fix Version label should appear in extra-fields line")
 		}
+		// Description preview still present.
 		if !strings.Contains(out, "This is the description text") {
 			t.Error("description preview should still appear")
 		}

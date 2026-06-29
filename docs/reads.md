@@ -220,7 +220,14 @@ The effective JQL is always echoed on the first line of plain-text output. `stat
 
 `key, status, type, priority, assignee, updated, summary`
 
-`--fields` adds to the default columns: `--fields "description"` includes a third line per result with a single-line, ~100-character preview. Combine with comma syntax: `--fields "description,reporter,fixVersions"`. `--fields-only "key,summary,description"` restricts to exactly those fields (mutex with `--fields`). `type` renders from `issueType`; the NDJSON field is `issueType`.
+`--fields` adds to the default columns:
+- `--fields "description"` — adds a third line per result: a single-line, ~100-character wiki-markup-stripped preview.
+- `--fields "timeestimate,resolution"` — adds a fourth line per result showing those fields with their labels (`Remaining: —  Resolution: —`). Any field beyond the default set that is not `description` appears here, always emitted (showing `—` when the field is null/unset on that issue).
+- Combine freely: `--fields "description,resolution,reporter"`.
+
+`--fields-only "key,summary,description"` restricts to exactly those fields (mutex with `--fields`). `type` renders from `issueType`; the NDJSON field is `issueType`.
+
+**Known extra-field labels:** `resolution` → `Resolution`, `timeestimate` → `Remaining`, `timeoriginalestimate` → `Estimate`, `timespent` → `Spent`, `reporter` → `Reporter`, `fixVersions` → `Fix Version`, `duedate` → `Due`. Time values are formatted as `2h30m`. Unknown field IDs appear with the raw ID as the label.
 
 ### Plain-text output shape
 
@@ -240,15 +247,19 @@ total: 14  page: 1/1
 [exit:0 | Xms]
 ```
 
-With `--fields "description"`, a third line per issue shows a description preview (4-space indent, ≤100 chars, ending in `…` if clipped):
+With `--fields "description"`, a third line per issue shows a description preview (4-space indent, ≤100 chars, ending in `…` if clipped). Wiki-markup macros (`{panel}`, `{color}`, `{code}`, etc.) and formatting markers are stripped.
+
+With any other extra field (e.g. `--fields "timeestimate,resolution"`), a further line shows `Label: value` pairs — always present, showing `—` when the field has no value for that issue:
 
 ```
 [1] Bug  WEB-812  Summary text                                    In Progress
     Prio: High  Assignee: Alex Chen  Updated: 2d ago
     Fix the login page for users with long email addresses so tha…
+    Remaining: 4h  Resolution: —
 
 [2] Story  WEB-799  Summary text                                  Open
     Prio: Medium  Assignee: —  Updated: 5d ago
+    Remaining: —  Resolution: Fixed
 
 --- page 1 of 1 ---
 [exit:0 | Xms]
