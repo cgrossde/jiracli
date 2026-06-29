@@ -136,11 +136,25 @@ func ConfigHierarchy(ctx context.Context, out io.Writer, flags ConfigHierarchyFl
 		changed = true
 	}
 
+	client := jira.New(entry)
+	hf := jira.HierarchyFieldIDs{
+		EpicLink:   entry.Hierarchy.EpicLinkField,
+		ParentLink: entry.Hierarchy.ParentLinkField,
+		Portfolio:  entry.Hierarchy.PortfolioField,
+	}
+
 	if changed {
 		entry.Hierarchy.DiscoveredAt = time.Now().UTC()
 		if err := keychain.Save(entry); err != nil {
 			return "", fmt.Errorf("saving hierarchy config: %w", err)
 		}
+		// Run live diagnostics immediately after save and stream to real stdout.
+		fmt.Fprintf(out, "\nRunning live field diagnostics…\n")
+		probes := jira.ProbeHierarchy(ctx, client, hf, entry.Hierarchy.PortfolioFieldName)
+		for _, p := range probes {
+			fmt.Fprint(out, formatProbe(p))
+		}
+		fmt.Fprintln(out)
 	}
 
 	if flags.JSON {
@@ -159,6 +173,14 @@ func ConfigHierarchy(ctx context.Context, out io.Writer, flags ConfigHierarchyFl
 	if !entry.Hierarchy.DiscoveredAt.IsZero() {
 		fmt.Fprintf(&sb, "  Discovered at    : %s\n", entry.Hierarchy.DiscoveredAt.Format(time.RFC3339))
 	}
+	// Live diagnostics in read-only display (no changes made).
+	if !changed {
+		sb.WriteString("\nField diagnostics (live):\n")
+		probes := jira.ProbeHierarchy(ctx, client, hf, entry.Hierarchy.PortfolioFieldName)
+		for _, p := range probes {
+			sb.WriteString(formatProbe(p))
+		}
+	}
 	return sb.String(), nil
 }
 
@@ -168,4 +190,19 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+// formatProbe renders a single FieldProbe as a status line.
+func formatProbe(p jira.FieldProbe) string {
+	icon := "✓"
+	if !p.OK {
+		icon = "✗"
+	}
+	if p.FieldID == "" {
+		icon = "–"
+	}
+	fid := p.FieldID
+	if fid == "" {
+		fid = "(none)"
+	}
+	return fmt.Sprintf("  %s %-14s %-24s %s\n", icon, p.Label, fid, p.Note)
 }

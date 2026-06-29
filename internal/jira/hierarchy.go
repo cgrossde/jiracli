@@ -2,6 +2,7 @@ package jira
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -106,15 +107,21 @@ func BuildHierarchy(
 	childFields := []string{"summary", "status", "issuetype", "assignee"}
 	switch strings.ToLower(subject.IssueType) {
 	case "epic":
+		// Classic projects: children linked via Epic Link custom field.
 		jql := `"Epic Link" = ` + key
 		resp, err := c.Search(ctx, jql, 1, 100, childFields)
+		if err != nil || resp.Total == 0 {
+			// Next-gen / team-managed projects: children linked via built-in parent field.
+			if resp2, err2 := c.Search(ctx, `parent = `+key, 1, 100, childFields); err2 == nil && resp2.Total > 0 {
+				resp, err = resp2, nil
+			}
+		}
 		if err != nil {
 			childrenError = err.Error()
 		} else {
 			childrenTotal = resp.Total
 			for _, issue := range resp.Issues {
-				ch := nodeFromRaw(issue)
-				children = append(children, ch)
+				children = append(children, nodeFromRaw(issue))
 			}
 		}
 	default:
@@ -235,4 +242,94 @@ func nodeFromRaw(raw IssueRaw) HierarchyNode {
 		IssueType:      raw.Fields.IssueType.Name,
 		Assignee:       a,
 	}
+}
+// FieldProbe holds the result of a live diagnostic test for one hierarchy field.
+type FieldProbe struct {
+	Label     string // "Epic Link", "Parent Link", "Portfolio"
+	FieldID   string // configured field ID, "" if unconfigured
+	OK        bool   // true when the field is searchable and returns results
+	Note      string // human-readable status detail
+}
+
+// ProbeHierarchy runs lightweight live diagnostics (limit-1 searches) for each
+// configured hierarchy field. Safe to call with a zero HierarchyFieldIDs — fields
+// that are unconfigured are reported as such without making any API calls.
+// Errors per field are captured in FieldProbe.Note; the function itself never returns
+// an error so callers get a complete report even when one field fails.
+func ProbeHierarchy(ctx context.Context, c *Client, hf HierarchyFieldIDs, portfolioFieldName string) []FieldProbe {
+	var probes []FieldProbe
+	tiny := []string{"summary"}
+
+	// Epic Link — classic projects use "Epic Link" = KEY children.
+	epicProbe := FieldProbe{Label: "Epic Link", FieldID: hf.EpicLink}
+	if hf.EpicLink == "" {
+		epicProbe.Note = "not configured — classic Epic→Story linking disabled"
+	} else {
+		jql := `"Epic Link" is not EMPTY`
+		resp, err := c.Search(ctx, jql, 1, 1, tiny)
+		if err != nil {
+			epicProbe.Note = "field not searchable: " + err.Error()
+		} else if resp.Total == 0 {
+			epicProbe.OK = true
+			epicProbe.Note = "field exists but no issues found with Epic Link set (next-gen instance?)"
+		} else {
+			epicProbe.OK = true
+			epicProbe.Note = fmt.Sprintf("ok — %d issues have Epic Link set", resp.Total)
+		}
+	}
+	probes = append(probes, epicProbe)
+
+	// Parent Link — used for Epic→Initiative (and next-gen Epic→Story).
+	plProbe := FieldProbe{Label: "Parent Link", FieldID: hf.ParentLink}
+	if hf.ParentLink == "" {
+		plProbe.Note = "not configured — Initiative→Epic linking via Parent Link disabled"
+	} else {
+		fieldNum := strings.TrimPrefix(hf.ParentLink, "customfield_")
+		jql := `cf[` + fieldNum + `] is not EMPTY`
+		resp, err := c.Search(ctx, jql, 1, 1, tiny)
+		if err != nil {
+			plProbe.Note = "field not searchable: " + err.Error()
+		} else if resp.Total == 0 {
+			plProbe.OK = true
+			plProbe.Note = "field exists but no issues found with Parent Link set"
+		} else {
+			plProbe.OK = true
+			plProbe.Note = fmt.Sprintf("ok — %d issues have Parent Link set", resp.Total)
+		}
+	}
+	probes = append(probes, plProbe)
+
+	// Portfolio field.
+	pfProbe := FieldProbe{Label: "Portfolio", FieldID: hf.Portfolio}
+	if hf.Portfolio == "" {
+		pfProbe.Note = "not configured — Initiative→Epic linking via portfolio field disabled"
+	} else if portfolioFieldName == "" {
+		pfProbe.Note = "field ID set but display name missing — run: jiracli config hierarchy --rediscover"
+	} else {
+		jql := `"` + portfolioFieldName + `" is not EMPTY`
+		resp, err := c.Search(ctx, jql, 1, 1, tiny)
+		if err != nil {
+			// ~ operator might be required; fall back
+			jql2 := `"` + portfolioFieldName + `" ~ "*"`
+			resp2, err2 := c.Search(ctx, jql2, 1, 1, tiny)
+			if err2 != nil {
+				pfProbe.Note = "field not searchable: " + err.Error()
+			} else if resp2.Total == 0 {
+				pfProbe.OK = true
+				pfProbe.Note = "field exists but no issues found with portfolio field set"
+			} else {
+				pfProbe.OK = true
+				pfProbe.Note = fmt.Sprintf("ok (text-search) — %d issues have %s set", resp2.Total, portfolioFieldName)
+			}
+		} else if resp.Total == 0 {
+			pfProbe.OK = true
+			pfProbe.Note = "field exists but no issues found with portfolio field set"
+		} else {
+			pfProbe.OK = true
+			pfProbe.Note = fmt.Sprintf("ok — %d issues have %s set", resp.Total, portfolioFieldName)
+		}
+	}
+	probes = append(probes, pfProbe)
+
+	return probes
 }
