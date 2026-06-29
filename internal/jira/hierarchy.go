@@ -45,7 +45,7 @@ func BuildHierarchy(
 	key string,
 ) (HierarchyChain, error) {
 	// Build the base fields list for the subject fetch.
-	baseFieldSlice := []string{"summary", "status", "issuetype", "assignee", "subtasks"}
+	baseFieldSlice := []string{"summary", "status", "issuetype", "assignee", "subtasks", "parent"}
 	baseFieldSlice = append(baseFieldSlice, hf.FieldList()...)
 	baseFields := strings.Join(baseFieldSlice, ",")
 
@@ -81,7 +81,7 @@ func BuildHierarchy(
 		seen[parentKey] = true
 
 		// Fetch ancestor with summary+status+issuetype + hierarchy fields (for further walking).
-		ancFields := "summary,status,issuetype," + strings.Join(hf.FieldList(), ",")
+		ancFields := "summary,status,issuetype,parent," + strings.Join(hf.FieldList(), ",")
 		ancRaw, err := c.GetIssue(ctx, parentKey, ancFields, false)
 		if err != nil {
 			break // fail soft — stop walk
