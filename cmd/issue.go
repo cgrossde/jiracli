@@ -117,6 +117,20 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 			}
 		}
 	}
+	// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio populate.
+	// Only when fieldSet is nil (default or additive spec) — explicit replacement
+	// specs already express exactly what the user wants.
+	if fieldSet == nil {
+		for _, fid := range []string{
+			entry.Hierarchy.EpicLinkField,
+			entry.Hierarchy.PortfolioField,
+		} {
+			if fid == "" || strings.Contains(fields, fid) {
+				continue
+			}
+			fields += "," + fid
+		}
+	}
 
 	raw, err := client.GetIssue(ctx, parsed.Key, fields, !flags.NoHistory)
 	if err != nil {
@@ -128,7 +142,12 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		commentsN = 0
 	}
 
-	rec := jira.ToIssueRecord(raw, commentsN)
+	hf := jira.HierarchyFieldIDs{
+		EpicLink:   entry.Hierarchy.EpicLinkField,
+		ParentLink: entry.Hierarchy.ParentLinkField,
+		Portfolio:  entry.Hierarchy.PortfolioField,
+	}
+	rec := jira.ToIssueRecord(raw, commentsN, hf)
 
 	// Resolve FromCategory/ToCategory for status transitions in the activity
 	// timeline. Uses the cached status list — failure is non-fatal.
@@ -195,6 +214,22 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 			}
 		}
 	}
+	// Resolve Portfolio summary with a single extra fetch.
+	// Fail-soft: surface the key with empty summary on error rather than dropping it.
+	if rec.Portfolio != nil && rec.Portfolio.Key != "" && rec.Portfolio.Summary == "" {
+		if pfRaw, pfErr := client.GetIssue(ctx, rec.Portfolio.Key, "summary,status,issuetype", false); pfErr == nil {
+			rec.Portfolio.Summary = pfRaw.Fields.Summary
+			rec.Portfolio.Status = pfRaw.Fields.Status.Name
+			rec.Portfolio.StatusCategory = pfRaw.Fields.Status.StatusCategory.Name
+		}
+	}
+	// Backfill Epic summary — Epic Link returns only a key string, never a summary.
+	// Fail-soft: key remains populated even if the fetch fails.
+	if rec.Epic != nil && rec.Epic.Key != "" && rec.Epic.Summary == "" {
+		if epRaw, epErr := client.GetIssue(ctx, rec.Epic.Key, "summary", false); epErr == nil {
+			rec.Epic.Summary = epRaw.Fields.Summary
+		}
+	}
 
 	if flags.JSON {
 		data, err := json.Marshal(rec)
@@ -233,7 +268,7 @@ func resolveParentKey(ctx context.Context, client *jira.Client, store *cache.Sto
 
 	// 1. Parent Link custom field.
 	if parentLinkFieldID != "" {
-		if pk := extractParentLink(raw.RawFields, parentLinkFieldID); pk != "" {
+		if pk := jira.ExtractRawKey(raw.RawFields, parentLinkFieldID); pk != "" {
 			return pk, nil
 		}
 	}
@@ -244,36 +279,13 @@ func resolveParentKey(ctx context.Context, client *jira.Client, store *cache.Sto
 	}
 
 	// 3. Epic Link (resolved field id, falls back to customfield_10014).
-	if pk := extractParentLink(raw.RawFields, epicLinkFieldID); pk != "" {
+	if pk := jira.ExtractRawKey(raw.RawFields, epicLinkFieldID); pk != "" {
 		return pk, nil
 	}
 
 	return "", fmt.Errorf("no parent found for %s — issue has no Parent Link, Parent, or Epic Link", key)
 }
 
-// extractParentLink reads a custom field by id from an IssueRaw.RawFields map.
-// Returns "" if the field is missing, null, or its key cannot be resolved.
-func extractParentLink(rawFields map[string]json.RawMessage, fieldID string) string {
-	if rawFields == nil {
-		return ""
-	}
-	raw, ok := rawFields[fieldID]
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	// Jira returns Parent Link as a string key or as an object {"key":"..."}.
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil && asString != "" {
-		return asString
-	}
-	var asObj struct {
-		Key string `json:"key"`
-	}
-	if err := json.Unmarshal(raw, &asObj); err == nil {
-		return asObj.Key
-	}
-	return ""
-}
 
 // resolveFieldList applies +add / -drop / replace semantics to the default field list.
 // If spec has no leading +/-, it is treated as a full replacement.
@@ -381,20 +393,17 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	}
 	typeBadge := colorIssueType(rec.IssueType)
 	statusBadge := colorStatusName(rec.Status)
-	if colorsEnabled() {
-		fmt.Fprintf(&sb, "%s  %s%s%s  %s · %s\n",
+	clr := colorsEnabled()
+	if clr {
+		fmt.Fprintf(&sb, "%s  %s  %s · %s\n",
 			typeBadge,
-			ansiBold, rec.Key, ansiReset,
+			jira.Bold(rec.Key, true),
 			statusBadge,
 			colorPriority(priority))
 	} else {
 		fmt.Fprintf(&sb, "%s  %s  %s · %s\n", typeBadge, rec.Key, rec.Status, priority)
 	}
-	if colorsEnabled() {
-		fmt.Fprintf(&sb, "%s%s%s\n", ansiBold+ansiFgW, rec.Summary, ansiReset)
-	} else {
-		fmt.Fprintf(&sb, "%q\n", rec.Summary)
-	}
+	fmt.Fprintf(&sb, "%s\n", jira.BoldFgW(rec.Summary, clr))
 	sb.WriteByte('\n')
 
 	// People & dates — only show when those fields were fetched.
@@ -428,14 +437,23 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	// Epic / Parent
 	if rec.Epic != nil {
 		if rec.Epic.Summary != "" {
-			fmt.Fprintf(&sb, "Epic: %s  %q\n", rec.Epic.Key, rec.Epic.Summary)
+			fmt.Fprintf(&sb, "%s %s  %q\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary)
 		} else {
-			fmt.Fprintf(&sb, "Epic: %s\n", rec.Epic.Key)
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Epic:"), rec.Epic.Key)
 		}
 		sb.WriteByte('\n')
 	}
 	if rec.Parent != nil {
-		fmt.Fprintf(&sb, "Parent: %s  %q  (%s)\n", rec.Parent.Key, rec.Parent.Summary, rec.Parent.Status)
+		fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary, rec.Parent.Status)
+		sb.WriteByte('\n')
+	}
+	if rec.Portfolio != nil {
+		if rec.Portfolio.Summary != "" {
+			fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Portfolio:"), rec.Portfolio.Key, rec.Portfolio.Summary, rec.Portfolio.Status)
+		} else {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Portfolio:"), rec.Portfolio.Key)
+		}
+		fmt.Fprintf(&sb, "  → jiracli show hierarchy %s\n", rec.Key)
 		sb.WriteByte('\n')
 	}
 
@@ -471,7 +489,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 			coloredStatus := colorStatusName(l.Issue.Status)
 			// Pad the status column by visible width (strip ANSI for measurement).
 			statusVis := len([]rune(jira.TruncateString(l.Issue.Status, 14)))
-			statusPadded := coloredStatus + strings.Repeat(" ", 14-statusVis)
+			statusPadded := coloredStatus + strings.Repeat(" ", max(0, 14-statusVis))
 			linkTypeBadge := colorIssueType(l.Issue.IssueType)
 			prefix := ""
 			if linkTypeBadge != "" {
@@ -479,7 +497,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 			}
 			summary := jira.TruncateString(l.Issue.Summary, 69)
 			summaryVis := len([]rune(summary))
-			summaryPadded := summary + strings.Repeat(" ", 70-summaryVis)
+			summaryPadded := summary + strings.Repeat(" ", max(0, 70-summaryVis))
 			fmt.Fprintf(&sb, "  %-18s  %s%-16s  %s  %s  %s\n",
 				jira.TruncateString(l.Relationship, 18),
 				prefix,
@@ -550,7 +568,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 				chStatus := colorStatusName(ch.Status)
 				// Align: key 12, status 14 visible, assignee 20, summary quoted
 				statusVis := len([]rune(jira.TruncateString(ch.Status, 14)))
-				statusPadded := chStatus + strings.Repeat(" ", 14-statusVis)
+				statusPadded := chStatus + strings.Repeat(" ", max(0, 14-statusVis))
 				fmt.Fprintf(&sb, "  %s  %-12s  %s  %-20s  %q\n",
 					chTypeBadge,
 					jira.TruncateString(ch.Key, 12),
@@ -621,6 +639,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	fmt.Fprintf(&sb, "  → jiracli show comments     %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show history      %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show transitions  %s\n", rec.Key)
+	fmt.Fprintf(&sb, "  → jiracli show hierarchy    %s\n", rec.Key)
 
 	return sb.String()
 }

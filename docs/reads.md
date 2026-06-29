@@ -45,6 +45,8 @@ Fetches a single issue with inline latest comment and changelog.
 
 Never uses `fields=*all` or `expand=renderedFields`.
 
+When a hierarchy configuration exists for the profile (set via `setup` or `config hierarchy`), the Epic Link and Portfolio custom-field IDs are appended to the field list automatically.
+
 ### `--fields` spec
 
 - **Replace:** `--fields "key,status,assignee"` — shows only those columns.
@@ -64,6 +66,7 @@ Assignee: Alex Chen (u1)               Reporter: Sam Patel
 Created:  2026-05-10                   Updated: 2026-06-22
 
 Epic: ACME-100  "Epic summary"
+Portfolio: ACME-50  "Modernise authentication platform"  (Open)
 
 Fix Versions: 2026.06
 Labels: label1, label2
@@ -105,6 +108,7 @@ Drill in:
   → jiracli show comments     ACME-123
   → jiracli show history      ACME-123
   → jiracli show transitions  ACME-123
+  → jiracli show hierarchy    ACME-123
 
 [exit:0 | Xms]
 ```
@@ -121,6 +125,7 @@ Activity rules:
 Children section:
 - Sub-tasks are fetched inline from the issue response (no extra API call).
 - Epic children (`Epic Link = <KEY>`) require one extra `search` call; use `--no-children` to skip it.
+- Use `jiracli show hierarchy <KEY>` to walk the full Initiative → Epic → Subject chain.
 - Up to **15 children** are shown: non-Done first, Done last (stable sort within each group).
 - When truncated, the heading reads `Children (15 of N shown)` and a `→ jiracli search` hint shows all.
 - `Children: (none)` is shown explicitly when no children exist and `--no-children` is not set.
@@ -155,6 +160,7 @@ Single object (v1 schema, additive-only):
   "fixVersions": [],
   "parent": null,
   "epic": {"key": "ACME-100", "summary": "Auth reliability"},
+  "portfolio":      { "key": "ACME-50", "summary": "Modernise authentication platform", "status": "Open", "statusCategory": "To Do" },
   "links": [{"type":"Blocks","direction":"outward","relationship":"blocks","issue":{"key":"ACME-145","summary":"...","status":"In Progress","statusCategory":"In Progress"}}],
   "attachments": [{"id":"11001","filename":"trace.har","mimeType":"application/json","size":145000,"uploaded":"...","author":"u1"}],
   "comments": {
@@ -171,6 +177,8 @@ Single object (v1 schema, additive-only):
 ```
 
 `comments.items` contains the latest `--comments N` entries. `comments.truncated` is `true` when `total > items.length`. Full thread via `jiracli show comments <KEY> --json`.
+
+`portfolio`: `null` when absent (field is omitted in JSON); `IssueSummary` object (`key`, `summary`, `status`, `statusCategory`) when the issue belongs to a portfolio. Requires hierarchy configuration — see `jiracli config hierarchy`.
 
 ### Errors
 
@@ -399,6 +407,76 @@ One object per transition:
 ```ndjson
 {"id":"31","name":"Done","toStatus":"Done","toStatusCategory":"Done"}
 ```
+
+---
+
+## `hierarchy <KEY>`
+
+Walks the full ancestor chain (Initiative → Epic → Subject) and fetches children appropriate to the subject's type.
+
+    jiracli show hierarchy <KEY> [flags]
+
+Requires hierarchy field IDs to be configured for the profile — run `jiracli setup --reconfigure` or `jiracli config hierarchy --rediscover` first.
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `--json` | NDJSON output (one object: the full chain) |
+| `--profile <name>` | Credential profile |
+
+### Walk behaviour
+
+- **Ancestor walk**: follows Portfolio → Parent Link → typed `parent` field → Epic Link, up to 8 hops. Cycles are detected and stopped silently.
+- **Children**:
+  - Subject is an **Epic** → children via JQL `"Epic Link" = KEY` (one search call)
+  - Subject is a **portfolio-level type** (Initiative, Programme, Feature, etc.) → children via JQL `"<portfolioFieldName>" = KEY`
+  - Otherwise → subtasks from the subject's inline response (no extra call)
+- Up to 100 children are returned; Done-last sort within the display cap of 15.
+
+### Plain-text output shape
+
+```
+ACME-50         [Initiative]  Open            Modernise authentication platform
+ACME-100        [Epic]        In Progress     Fix login redirect
+▶ ACME-123       [Bug]         In Progress     Fix login page timeout
+  ├─ ACME-150    [Sub-task]    To Do           Jane Smith              Reproduce on Safari
+  └─ ACME-151    [Sub-task]    Done            John Doe                Write regression test
+
+[exit:0 | Xms]
+```
+
+Ancestor rows are dimmed (grey) when the terminal supports ANSI. The subject is prefixed with `▶`. Children use `├─` / `└─` tree connectors. When children are capped at 15, a `… N more` line is appended.
+
+When the subject has no ancestors and no children:
+```
+▶ ACME-999       [Task]        Open            Standalone task
+(standalone issue — no parent or children)
+```
+
+### NDJSON output (`--json`)
+
+One object:
+
+```json
+{
+  "ancestors": [
+    {"key":"ACME-50","summary":"Modernise authentication platform","status":"Open","statusCategory":"To Do","issueType":"Initiative"},
+    {"key":"ACME-100","summary":"Fix login redirect","status":"In Progress","statusCategory":"In Progress","issueType":"Epic"}
+  ],
+  "subject": {"key":"ACME-123","summary":"Fix login page timeout","status":"In Progress","statusCategory":"In Progress","issueType":"Bug","isSubject":true},
+  "children": [
+    {"key":"ACME-150","summary":"Reproduce on Safari","status":"To Do","statusCategory":"To Do","issueType":"Sub-task","assignee":"Jane Smith"},
+    {"key":"ACME-151","summary":"Write regression test","status":"Done","statusCategory":"Done","issueType":"Sub-task","assignee":"John Doe"}
+  ],
+  "childrenTotal": 2
+}
+```
+
+### Errors
+
+- Hierarchy not configured: `[stderr] hierarchy not configured for profile "default" — run: jiracli setup --reconfigure`, exit 1.
+- Non-issue ref: `[stderr] show hierarchy requires a plain issue key — got "ACME-123:comment:9421"`, exit 1.
 
 ---
 

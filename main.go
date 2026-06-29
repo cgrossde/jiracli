@@ -178,6 +178,12 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	cacheCmd.GroupID = "util"
 	root.AddCommand(cacheCmd)
 
+	// config group.
+	configCmd := jiracmd.NewConfigCmd(stdout)
+	wrapGroup(configCmd)
+	configCmd.GroupID = "util"
+	root.AddCommand(configCmd)
+
 	return root
 }
 

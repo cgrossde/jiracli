@@ -116,6 +116,7 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 		NewTransitionsCmd(),
 		NewAttachmentsCmd(),
 		NewAssignedCmd(),
+		NewShowHierarchyCmd(),
 	)
 	return root
 }

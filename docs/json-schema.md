@@ -33,6 +33,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
   "fixVersions":     ["4.5.0"],
   "parent":          { "key": "ACME-100", "summary": "Auth epic", "status": "In Progress", "statusCategory": "In Progress" },
   "epic":            { "key": "ACME-100", "summary": "Auth epic" },
+  "portfolio":       { "key": "ACME-50", "summary": "Modernise authentication platform", "status": "Open", "statusCategory": "To Do" },
   "links": [
     {
       "id":           "10234",
@@ -88,6 +89,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
 - `resolution`: `null` when unresolved; string (e.g. `"Fixed"`) when resolved.
 - `assignee`, `reporter`: `null` when unset.
 - `parent`, `epic`: `null` when absent.
+- `portfolio`: `null` when absent (field omitted — `omitempty`); `IssueSummary` object with `key`, `summary`, `status`, `statusCategory`. Populated when hierarchy is configured for the profile and the issue has a portfolio-level parent. Summary is fetched with one extra API call.
 - `comments.truncated`: `true` when `total > items.length` (controlled by `--comments N`).
 - `historyTruncated`: `true` only on the changelog fallback path (DC <8.7) when the server capped results.
 - `activityTimeline[].type`: `"transition"` when the entry contains a `status` field change; `"update"` otherwise.
@@ -263,3 +265,68 @@ One record per invocation. Produced inline in `cmd/me.go`.
 - `active`: `true` when the account is active on the instance.
 - `authenticated`: `false` when the PAT is rejected (HTTP 401); command exits 1.
 - `error`: `null` on success; error string on failure.
+
+---
+
+## hierarchy
+
+Command: `jiracli show hierarchy <KEY> [--json]`
+
+One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal/jira/hierarchy.go`).
+
+```json
+{
+  "ancestors": [
+    {
+      "key":            "ACME-50",
+      "summary":        "Modernise authentication platform",
+      "status":         "Open",
+      "statusCategory": "To Do",
+      "issueType":      "Initiative"
+    },
+    {
+      "key":            "ACME-100",
+      "summary":        "Fix login redirect",
+      "status":         "In Progress",
+      "statusCategory": "In Progress",
+      "issueType":      "Epic"
+    }
+  ],
+  "subject": {
+    "key":            "ACME-123",
+    "summary":        "Fix login page timeout",
+    "status":         "In Progress",
+    "statusCategory": "In Progress",
+    "issueType":      "Bug",
+    "isSubject":      true
+  },
+  "children": [
+    {
+      "key":            "ACME-150",
+      "summary":        "Reproduce on Safari",
+      "status":         "To Do",
+      "statusCategory": "To Do",
+      "issueType":      "Sub-task",
+      "assignee":       "Jane Smith"
+    },
+    {
+      "key":            "ACME-151",
+      "summary":        "Write regression test",
+      "status":         "Done",
+      "statusCategory": "Done",
+      "issueType":      "Sub-task",
+      "assignee":       "John Doe"
+    }
+  ],
+  "childrenTotal": 2
+}
+```
+
+**Field notes:**
+- `ancestors`: array of nodes, root-first (Initiative at index 0, Epic at index N-1). Empty array `[]` when the subject has no ancestors.
+- `subject`: the issue passed as the argument. Always has `"isSubject": true`.
+- `children`: up to 100 nodes. For Epics: issues where `Epic Link = KEY`. For portfolio-level types: issues where `"<portfolioFieldName>" = KEY`. Otherwise: subtasks inline from the subject's response (no extra API call).
+- `childrenTotal`: total server-side count; may exceed `len(children)` for large Epics.
+- `childrenError`: string; omitted (`omitempty`) when empty. When set, `children` is empty and the error describes why the search failed.
+- Node `assignee`: display-name string; omitted (`omitempty`) when unassigned or for ancestor rows.
+- Node `isSubject`: `true` only on the subject node; omitted on all other nodes.

@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"github.com/cgrossde/jiracli/internal/jira"
 )
@@ -245,64 +243,36 @@ func renderSearchJSON(resp jira.SearchResponse, page, limit int) (string, error)
 	}
 	return sb.String(), nil
 }
-
-// ANSI color helpers — no external dependency.
-// Badge format: bold white text on a colored background, padded with spaces.
+// ANSI constants — only what the local helpers below still need directly.
+// colorIssueType, colorStatusName, colorsEnabled, and stripAnsi have been
+// promoted to internal/jira; local helpers call them via the jira package.
 const (
 	ansiReset = "\x1b[0m"
 	ansiBold  = "\x1b[1m"
 	ansiFgW   = "\x1b[97m" // bright white foreground
 
 	// Background colors (256-color) — muted to avoid overwhelming dark terminals.
-	ansiBgToDo       = "\x1b[48;5;238m" // dark grey        — "To Do / Open / Ready"
-	ansiBgInProgress = "\x1b[48;5;24m"  // steel blue       — "In Progress / Pending …"
-	ansiBgDone       = "\x1b[48;5;22m"  // dark green       — "Done"
+	ansiBgToDo       = "\x1b[48;5;238m"
+	ansiBgInProgress = "\x1b[48;5;24m"
+	ansiBgDone       = "\x1b[48;5;22m"
 
-	ansiBgBug   = "\x1b[48;5;88m" // dark red
-	ansiBgVuln  = "\x1b[48;5;88m" // dark red (same as bug)
-	ansiBgStory = "\x1b[48;5;28m" // dark green
-	ansiBgEpic  = "\x1b[48;5;55m" // dark purple
-	ansiBgTask  = "\x1b[48;5;24m" // steel blue (same as in-progress)
-
-	// Foreground-only for priority (no badge).
+	// Foreground-only.
 	ansiFgOrange = "\x1b[38;5;208m"
 	ansiFgRed    = "\x1b[31m"
 	ansiFgGrey   = "\x1b[38;5;246m"
 )
 
-// colorsEnabled reports whether ANSI colour sequences should be emitted.
-// Colour is disabled when:
-//   - the NO_COLOR env var is set (https://no-color.org), or
-//   - stdout is not a terminal (pipe, redirect, CI, etc.).
-func colorsEnabled() bool {
-	if _, set := os.LookupEnv("NO_COLOR"); set {
-		return false
-	}
-	return term.IsTerminal(int(os.Stdout.Fd()))
-}
+// colorsEnabled delegates to jira.ColorsEnabled.
+func colorsEnabled() bool { return jira.ColorsEnabled() }
 
-// stripAnsi removes ANSI escape sequences and returns the visible string.
-// Uses a state machine — no alloc for strings with no escapes.
-func stripAnsi(s string) string {
-	out := make([]byte, 0, len(s))
-	inEsc := false
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if inEsc {
-			if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') {
-				inEsc = false
-			}
-			continue
-		}
-		if b == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
-			inEsc = true
-			i++ // skip '['
-			continue
-		}
-		out = append(out, b)
-	}
-	return string(out)
-}
+// stripAnsi delegates to jira.StripAnsi.
+func stripAnsi(s string) string { return jira.StripAnsi(s) }
+
+// colorIssueType delegates to jira.ColorIssueType.
+func colorIssueType(name string) string { return jira.ColorIssueType(name, colorsEnabled()) }
+
+// colorStatusName delegates to jira.ColorStatusName.
+func colorStatusName(name string) string { return jira.ColorStatusName(name, colorsEnabled()) }
 
 const titleWidth = 110
 
@@ -369,29 +339,6 @@ func colorStatus(name, categoryKey string) string {
 	}
 }
 
-func colorIssueType(name string) string {
-	if name == "" {
-		return ""
-	}
-	if !colorsEnabled() {
-		return "[" + name + "]"
-	}
-	letter := string([]rune(name)[0])
-	switch strings.ToLower(name) {
-	case "bug":
-		return badge(ansiBgBug, letter)
-	case "vulnerability":
-		return badge(ansiBgVuln, letter)
-	case "story":
-		return badge(ansiBgStory, letter)
-	case "epic":
-		return badge(ansiBgEpic, letter)
-	case "task", "sub-task", "subtask":
-		return badge(ansiBgTask, letter)
-	}
-	return letter
-}
-
 func colorPriority(name string) string {
 	if !colorsEnabled() {
 		return name
@@ -406,21 +353,6 @@ func colorPriority(name string) string {
 		return ansiFgGrey + name + ansiReset
 	}
 	return name
-}
-
-// colorStatusName is like colorStatus but takes the category display name
-// ("In Progress", "Done", "To Do") rather than the raw API key.
-func colorStatusName(name string) string {
-	var key string
-	switch strings.ToLower(name) {
-	case "done":
-		key = "done"
-	case "in progress":
-		key = "indeterminate"
-	default:
-		key = "new"
-	}
-	return colorStatus(name, key)
 }
 
 // sectionLabel returns a bold section heading when colours are enabled.

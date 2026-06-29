@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/cgrossde/jiracli/internal/jira"
 )
 
 const (
@@ -99,7 +101,7 @@ func overflow(stdout string) string {
 		return stdout
 	}
 
-	tmpPath := writeTempFile(stdout)
+	tmpPath := writeTempFile(jira.StripAnsi(stdout))
 
 	truncated := lines
 	if len(lines) > overflowLineLimit {

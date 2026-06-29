@@ -63,8 +63,6 @@ type IssueRaw struct {
 				} `json:"issuetype"`
 			} `json:"fields"`
 		} `json:"parent"`
-		// customfield_10014 is the classic Epic Link field
-		EpicLink   string `json:"customfield_10014"`
 		IssueLinks []struct {
 			ID   string `json:"id"`
 			Type struct {
@@ -312,6 +310,7 @@ type IssueRecord struct {
 	FixVersions      []string           `json:"fixVersions"`
 	Parent           *IssueSummary      `json:"parent"`
 	Epic             *EpicRef           `json:"epic"`
+	Portfolio        *IssueSummary      `json:"portfolio,omitempty"`
 	Links            []IssueLinkRecord  `json:"links"`
 	Attachments      []AttachmentRecord `json:"attachments"`
 	Comments         CommentsBlock      `json:"comments"`
@@ -323,9 +322,62 @@ type IssueRecord struct {
 	ChildrenError    string             `json:"childrenError,omitempty"`
 }
 
+// HierarchyFieldIDs names the instance-specific custom field IDs used by
+// ToIssueRecord to populate Epic/Portfolio without per-call API lookups.
+// Empty strings disable the corresponding read — caller-provided zero value
+// is valid and behaves as "no hierarchy info available".
+type HierarchyFieldIDs struct {
+	EpicLink   string
+	ParentLink string
+	Portfolio  string
+}
+
+// FieldList returns the field IDs in a stable order for use in the
+// /issue?fields= query string. Empty entries are skipped.
+func (h HierarchyFieldIDs) FieldList() []string {
+	out := make([]string, 0, 3)
+	if h.EpicLink != "" {
+		out = append(out, h.EpicLink)
+	}
+	if h.ParentLink != "" {
+		out = append(out, h.ParentLink)
+	}
+	if h.Portfolio != "" {
+		out = append(out, h.Portfolio)
+	}
+	return out
+}
+
+// ExtractRawKey reads a custom field by id from a RawFields map.
+// Returns "" if the field is missing, null, or its key cannot be resolved.
+// Handles both string-key and {"key":"..."} object shapes.
+func ExtractRawKey(rawFields map[string]json.RawMessage, fieldID string) string {
+	if rawFields == nil {
+		return ""
+	}
+	raw, ok := rawFields[fieldID]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	// Jira returns some fields as a plain string key.
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil && asString != "" {
+		return asString
+	}
+	// Or as an object {"key":"..."}.
+	var asObj struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &asObj); err == nil {
+		return asObj.Key
+	}
+	return ""
+}
+
 // ToIssueRecord maps IssueRaw to IssueRecord.
 // previewN is the number of comments to include in Comments.Items (0 = none).
-func ToIssueRecord(raw IssueRaw, previewN int) IssueRecord {
+// hf carries per-instance custom field IDs for Epic Link and Portfolio reads.
+func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord {
 	f := raw.Fields
 	rec := IssueRecord{
 		Key:            raw.Key,
@@ -385,9 +437,17 @@ func ToIssueRecord(raw IssueRaw, previewN int) IssueRecord {
 			}
 		}
 	}
-	// Classic Epic Link fallback (customfield_10014)
-	if rec.Epic == nil && f.EpicLink != "" {
-		rec.Epic = &EpicRef{Key: f.EpicLink}
+	// Epic from configured custom field (instance-specific ID, e.g. customfield_10100).
+	if rec.Epic == nil && hf.EpicLink != "" {
+		if epicKey := ExtractRawKey(raw.RawFields, hf.EpicLink); epicKey != "" {
+			rec.Epic = &EpicRef{Key: epicKey}
+		}
+	}
+	// Portfolio (e.g. Initiative Link). Stored as key-only; caller may resolve summary.
+	if hf.Portfolio != "" {
+		if pkKey := ExtractRawKey(raw.RawFields, hf.Portfolio); pkKey != "" {
+			rec.Portfolio = &IssueSummary{Key: pkKey}
+		}
 	}
 
 	// Links

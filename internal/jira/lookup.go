@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cgrossde/jiracli/internal/cache"
@@ -283,4 +284,84 @@ func (c *Client) SuggestLabels(ctx context.Context, query string) ([]string, boo
 	// The Jira autocomplete endpoint caps results at 15.
 	truncated := len(labels) == 15
 	return labels, truncated, nil
+}
+// portfolioSeedTerms are case-insensitive substring matches for the candidate
+// field NAME. A field matches when its name contains any seed term and does
+// not contain any deny term.
+var portfolioSeedTerms = []string{"initiative", "program", "programme", "feature", "theme", "portfolio"}
+
+// portfolioDenyTerms are whole-word matches (split on non-letter chars) against
+// the field NAME, used to discard noisy candidates.
+var portfolioDenyTerms = []string{"sarb", "score", "sap", "ucr", "legacy", "api", "investment"}
+
+// PortfolioCandidates filters a field list to plausible portfolio-level fields.
+// Excludes fields already assigned to Epic Link or Parent Link, retains only
+// custom fields with string-shaped schema (or unknown schema), and applies
+// the seed/deny term rules above.
+func PortfolioCandidates(all []Field, epicLinkID, parentLinkID string) []Field {
+	out := make([]Field, 0, 8)
+	for _, f := range all {
+		if !f.Custom {
+			continue
+		}
+		if f.ID == epicLinkID || f.ID == parentLinkID {
+			continue
+		}
+		if f.Schema != nil {
+			switch f.Schema.Type {
+			case "string", "any", "":
+			default:
+				continue
+			}
+		}
+		nameLower := strings.ToLower(f.Name)
+		seeded := false
+		for _, s := range portfolioSeedTerms {
+			if strings.Contains(nameLower, s) {
+				seeded = true
+				break
+			}
+		}
+		if !seeded {
+			continue
+		}
+		words := splitWords(nameLower)
+		denied := false
+		for _, d := range portfolioDenyTerms {
+			for _, w := range words {
+				if w == d {
+					denied = true
+					break
+				}
+			}
+			if denied {
+				break
+			}
+		}
+		if denied {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// splitWords lowercases s and splits on any non-letter rune.
+func splitWords(s string) []string {
+	var out []string
+	cur := make([]rune, 0, 16)
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			cur = append(cur, r)
+			continue
+		}
+		if len(cur) > 0 {
+			out = append(out, string(cur))
+			cur = cur[:0]
+		}
+	}
+	if len(cur) > 0 {
+		out = append(out, string(cur))
+	}
+	return out
 }

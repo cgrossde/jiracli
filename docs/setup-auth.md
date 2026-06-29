@@ -17,13 +17,13 @@ Interactive first-time wizard. Idempotent — each step short-circuits when stat
 | `--profile <name>` | `default` | Target credential profile |
 | `--url <url>` | — | Pre-fill Step 1 (skips URL prompt) |
 | `--pat-file <path>` | — | Read PAT from file (CI/scripted use) |
-| `--no-skill` | false | Skip Step 3 (skill install) |
+| `--no-skill` | false | Skip Step 4 (skill install) |
 | `--reconfigure` | false | Force all prompts even when state is valid |
 | `--no-browser` | false | Print PAT-creation URL but never call `open` |
 
 ### Flow
 
-Three steps, each independently idempotent:
+Four steps, each independently idempotent:
 
 **Step 1 — Jira server URL**
 - Prompts for base URL; `--url` pre-fills.
@@ -39,7 +39,14 @@ Three steps, each independently idempotent:
 - On success: saves `{url, pat, user, displayName, savedAt, insecure?}` to Keychain service `jiracli` under the profile name. Sets that profile as the default if no default exists yet.
 - Short-circuit: stored PAT passes `/myself` probe → `Step 2: ✓ PAT still valid (<displayName>)`. On 401, drops into prompt loop regardless.
 
-**Step 3 — Skill install**
+**Step 3 — Hierarchy field discovery**
+- Auto-resolves the Epic Link and Parent Link custom-field IDs by querying `GET /rest/api/2/field` and matching by name.
+- Lists portfolio-level field candidates (fields whose name contains 'initiative', 'program', 'feature', 'theme', or 'portfolio') and prompts the user to pick one.
+- Stores the result in `HierarchyConfig` inside the Keychain entry.
+- Short-circuit: if `EpicLinkField` is already set in the stored entry and `--reconfigure` is not given, prints `✓ Hierarchy already configured (Epic=... Parent=... Portfolio=...)` and skips.
+- Fields not found (e.g. Jira Software not installed) print an advisory and continue — the step is non-fatal.
+
+**Step 4 — Skill install**
 - Byte-compares the embedded `SKILL.md` against `~/.claude/skills/jira/SKILL.md`.
 - Missing → prompts `Install? [Y/n]` (default Y).
 - Outdated → prompts `Skill exists but is outdated. Update? [Y/n]`.
@@ -61,9 +68,18 @@ Service `jiracli`, account = profile name. Stored as JSON:
   "user": "u1",
   "displayName": "Alex Chen",
   "savedAt": "2026-06-24T10:00:00Z",
-  "insecure": false
+  "insecure": false,
+  "hierarchy": {
+    "epicLinkField": "customfield_10100",
+    "parentLinkField": "customfield_10101",
+    "portfolioField": "customfield_10102",
+    "portfolioFieldName": "Initiative Link",
+    "discoveredAt": "2026-06-29T10:00:00Z"
+  }
 }
 ```
+
+`hierarchy` is `omitempty` — omitted on legacy profiles that haven't run setup step 3.
 
 `kind` is always `"dc-pat"` in v1. `insecure` is omitted when false.
 
@@ -225,3 +241,61 @@ Prints the authenticated user and credential status for the active profile. This
 - No entry → `[stderr] no credentials found for profile "X" — run: jiracli setup`, exit 1.
 - 401 → `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
 
+
+---
+
+## `config hierarchy`
+
+View or update the hierarchy field IDs stored for a credential profile. These IDs are used by `show <KEY>` (to populate `epic` and `portfolio`) and `show hierarchy <KEY>` (to walk the ancestor chain).
+
+    jiracli config hierarchy [flags]
+
+### Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--profile <name>` | default profile | Credential profile |
+| `--json` | false | NDJSON output |
+| `--rediscover` | false | Re-run field discovery: resolves Epic Link + Parent Link by name, scans portfolio candidates, prompts interactively |
+| `--portfolio <id\|name\|none>` | — | Set or clear the Portfolio field directly (bypasses interactive scan) |
+
+### Output (plain text, no flags)
+
+    Hierarchy config for profile "default":
+      Epic Link        : customfield_10100
+      Parent Link      : customfield_10101
+      Portfolio        : customfield_10102
+      Portfolio (name) : Initiative Link
+      Discovered at    : 2026-06-29T10:00:00Z
+
+When a field is not configured, `—` is shown.
+
+### Output (`--json`)
+
+```json
+{"epicLinkField":"customfield_10100","parentLinkField":"customfield_10101","portfolioField":"customfield_10102","portfolioFieldName":"Initiative Link","discoveredAt":"2026-06-29T10:00:00Z"}
+```
+
+### Usage patterns
+
+```bash
+# View current config
+jiracli config hierarchy
+
+# Re-discover all fields interactively (after setup or field ID changes)
+jiracli config hierarchy --rediscover
+
+# Set portfolio field by name
+jiracli config hierarchy --portfolio "Initiative Link"
+
+# Set portfolio field by custom field ID
+jiracli config hierarchy --portfolio customfield_10102
+
+# Clear portfolio field
+jiracli config hierarchy --portfolio none
+```
+
+### Errors
+
+- No credentials: `[stderr] no credentials found — run: jiracli setup`, exit 1.
+- Unknown field: `[stderr] unknown field "customfield_99999" — run: jiracli lookup fields`, exit 1.

@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/cgrossde/jiracli/internal/browser"
+	"github.com/cgrossde/jiracli/internal/cache"
 	"github.com/cgrossde/jiracli/internal/jira"
 	"github.com/cgrossde/jiracli/internal/keychain"
 )
@@ -38,10 +40,11 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "setup",
 		Short: "Interactive first-time setup wizard (auth + skill install)",
-		Long: `Guided setup in three steps:
+		Long: `Guided setup in four steps:
   1. Verify the Jira server URL
   2. Save a Personal Access Token (PAT)
-  3. Install the Claude/OpenCode skill`,
+  3. Discover hierarchy custom-field IDs
+  4. Install the Claude/OpenCode skill`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := rawOut
@@ -66,7 +69,7 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 			}
 
 			// ── Step 1: Server URL ──────────────────────────────────────────────
-			setupDivider(out, "Step 1 of 3 — Jira Server")
+			setupDivider(out, "Step 1 of 4 — Jira Server")
 
 			// Idempotent skip
 			if !flags.Reconfigure {
@@ -119,7 +122,7 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 
 		step2:
 			// ── Step 2: PAT ─────────────────────────────────────────────────────
-			setupDivider(out, "Step 2 of 3 — Personal Access Token")
+			setupDivider(out, "Step 2 of 4 — Personal Access Token")
 
 			// Idempotent skip
 			if !flags.Reconfigure {
@@ -127,7 +130,7 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 					client := jira.New(entry)
 					if u, err := client.Myself(ctx); err == nil {
 						fmt.Fprintf(out, "✓ PAT still valid (%s)\n", u.DisplayName)
-						goto step3
+						goto step3hierarchy
 					}
 					fmt.Fprintln(out, "Stored PAT was rejected — re-entering.")
 				}
@@ -185,9 +188,70 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 				}
 			}
 
-		step3:
-			// ── Step 3: Skill install ───────────────────────────────────────────
-			setupDivider(out, "Step 3 of 3 — Claude / OpenCode Skill")
+		step3hierarchy:
+			// ── Step 3: Hierarchy field discovery ──────────────────────────────
+			setupDivider(out, "Step 3 of 4 — Hierarchy Fields")
+
+			if !flags.Reconfigure && entry.Hierarchy.EpicLinkField != "" {
+				fmt.Fprintf(out, "✓ Hierarchy already configured (Epic=%s Parent=%s Portfolio=%s)\n",
+					entry.Hierarchy.EpicLinkField, entry.Hierarchy.ParentLinkField, entry.Hierarchy.PortfolioField)
+				goto step4skill
+			}
+
+			{
+				hClient := jira.New(entry)
+				hStore := cache.NewStore(entry)
+
+				var hc keychain.HierarchyConfig
+				if fid, _, err := hClient.ResolveFieldID(ctx, "Epic Link", hStore, false); err == nil {
+					hc.EpicLinkField = fid
+					fmt.Fprintf(out, "✓ Epic Link = %s\n", fid)
+				} else {
+					fmt.Fprintf(out, "  (Epic Link field not found — Jira Software not installed?)\n")
+				}
+				if fid, _, err := hClient.ResolveFieldID(ctx, "Parent Link", hStore, false); err == nil {
+					hc.ParentLinkField = fid
+					fmt.Fprintf(out, "✓ Parent Link = %s\n", fid)
+				} else {
+					fmt.Fprintf(out, "  (Parent Link field not found — Advanced Roadmaps not installed?)\n")
+				}
+
+				all, err := hClient.ListFields(ctx, hStore, false)
+				if err != nil {
+					fmt.Fprintf(out, "  (could not list fields for portfolio scan: %v — skipping)\n", err)
+				} else {
+					cands := jira.PortfolioCandidates(all, hc.EpicLinkField, hc.ParentLinkField)
+					switch len(cands) {
+					case 0:
+						fmt.Fprintf(out, "  (no portfolio-level custom fields found)\n")
+					default:
+						fmt.Fprintf(out, "\nPortfolio field candidates:\n")
+						for i, f := range cands {
+							fmt.Fprintf(out, "  [%d] %-30s (%s)\n", i+1, f.Name, f.ID)
+						}
+						fmt.Fprintf(out, "  [s] Skip (no portfolio field)\n")
+						pick := authPrompt("Pick one [1-" + fmt.Sprintf("%d", len(cands)) + " / s]: ")
+						pick = strings.TrimSpace(pick)
+						if pick != "" && pick != "s" && pick != "S" {
+							if n, perr := strconv.Atoi(pick); perr == nil && n >= 1 && n <= len(cands) {
+								hc.PortfolioField = cands[n-1].ID
+								hc.PortfolioFieldName = cands[n-1].Name
+								fmt.Fprintf(out, "✓ Portfolio = %s (%s)\n", cands[n-1].Name, cands[n-1].ID)
+							}
+						}
+					}
+				}
+
+				hc.DiscoveredAt = time.Now().UTC()
+				entry.Hierarchy = hc
+				if err := keychain.Save(entry); err != nil {
+					return fmt.Errorf("saving hierarchy config: %w", err)
+				}
+			}
+
+		step4skill:
+			// ── Step 4: Skill install ───────────────────────────────────────────
+			setupDivider(out, "Step 4 of 4 — Claude / OpenCode Skill")
 
 			if flags.NoSkill || len(skillContent) == 0 {
 				fmt.Fprintln(out, "Skill step skipped.")

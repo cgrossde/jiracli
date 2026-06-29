@@ -32,14 +32,26 @@ const indexAccount = "__index__"
 // Entry is the credential record stored for one profile.
 // Extend this struct with whatever credentials your CLI needs.
 type Entry struct {
-	Profile     string    `json:"profile"`
-	URL         string    `json:"url"`
-	Kind        string    `json:"kind"` // "dc-pat" in v1
-	PAT         string    `json:"pat"`
-	User        string    `json:"user"`
-	DisplayName string    `json:"displayName"`
-	SavedAt     time.Time `json:"savedAt"`
-	Insecure    bool      `json:"insecure,omitempty"`
+	Profile     string          `json:"profile"`
+	URL         string          `json:"url"`
+	Kind        string          `json:"kind"` // "dc-pat" in v1
+	PAT         string          `json:"pat"`
+	User        string          `json:"user"`
+	DisplayName string          `json:"displayName"`
+	SavedAt     time.Time       `json:"savedAt"`
+	Insecure    bool            `json:"insecure,omitempty"`
+	Hierarchy   HierarchyConfig `json:"hierarchy,omitempty"`
+}
+
+// HierarchyConfig stores per-instance custom-field IDs for hierarchy walks.
+// Populated by `jiracli setup` (or `--reconfigure`); empty on legacy profiles
+// — those profiles fall back to no-op behavior until re-setup.
+type HierarchyConfig struct {
+	EpicLinkField      string    `json:"epicLinkField,omitempty"`
+	ParentLinkField    string    `json:"parentLinkField,omitempty"`
+	PortfolioField     string    `json:"portfolioField,omitempty"`
+	PortfolioFieldName string    `json:"portfolioFieldName,omitempty"`
+	DiscoveredAt       time.Time `json:"discoveredAt,omitempty"`
 }
 
 // ErrNotFound is returned when no credential exists for the requested profile.
