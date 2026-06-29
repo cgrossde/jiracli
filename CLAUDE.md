@@ -21,14 +21,14 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `auth profile` | `[profile]`, `--clear`, `--list` | Get or set default profile |
 | `auth status` | `--profile`, `--json`, `--no-cache` | Show current authenticated user and credential status |
 | `config hierarchy` | `--profile`, `--json`, `--portfolio`, `--rediscover` | View or update hierarchy field IDs for the profile |
-| `show <ref>` | `--profile`, `--json`, `--no-history`, `--no-comments`, `--comments N`, `--fields`, `--no-children`, `--parent`, `-o` | Fetch and render one issue, or download attachment by compound ref (`-o` only used with `KEY:attach:ID` refs) |
+| `show <ref>` | `--profile`, `--json`, `--no-history`, `--no-comments`, `--comments N`, `--fields`, `--fields-only`, `--no-children`, `--parent`, `-o` | Fetch and render one issue, or download attachment by compound ref (`-o` only used with `KEY:attach:ID` refs) |
 | `show assigned` | `--profile`, `--json`, `--category`, `--limit`, `--page` | Issues assigned to the current user |
 | `show comments <KEY>` | `--profile`, `--json`, `--since`, `--limit`, `--page` | Issue comment thread |
 | `show history <KEY>` | `--profile`, `--json`, `--include-rank`, `--since`, `--limit`, `--page` | Changelog entries |
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
 | `show hierarchy <KEY>` | `--profile`, `--json` | Walk Initiative → Epic → Subject → Children for an issue |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
-| `search <jql...>` | `--profile`, `--json`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--assigned`, `--category` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user |
+| `search <jql...>` | `--profile`, `--json`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user |
 | `open <ref>` | `--profile`, `--print-url` | Open issue/comment/attachment in browser |
 | `lookup users` | `--profile`, `--project`, `--active`, `--limit`, `--json` | Search users |
 | `lookup labels` | `--profile`, `--project`, `--json` | Suggest labels |

@@ -14,6 +14,7 @@ import (
 type ShowHierarchyFlags struct {
 	Profile string
 	JSON    bool
+	All     bool
 }
 
 // NewShowHierarchyCmd builds the "show hierarchy" subcommand.
@@ -39,6 +40,7 @@ hint — run 'jiracli setup --reconfigure' or 'jiracli config hierarchy'.`,
 	}
 	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
 	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON (one object: the full chain)")
+	c.Flags().BoolVar(&flags.All, "all", false, "Fetch all children (bypasses the 100-result default cap)")
 	return c
 }
 
@@ -61,7 +63,7 @@ func ShowHierarchy(ctx context.Context, flags ShowHierarchyFlags, ref string) (s
 		ParentLink: entry.Hierarchy.ParentLinkField,
 		Portfolio:  entry.Hierarchy.PortfolioField,
 	}
-	chain, err := jira.BuildHierarchy(ctx, client, hf, entry.Hierarchy.PortfolioFieldName, parsed.Key)
+	chain, err := jira.BuildHierarchy(ctx, client, hf, entry.Hierarchy.PortfolioFieldName, parsed.Key, flags.All || flags.JSON)
 	if err != nil {
 		return "", fmt.Errorf("walking hierarchy from %s: %w", parsed.Key, err)
 	}

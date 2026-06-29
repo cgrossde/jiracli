@@ -22,6 +22,7 @@ type IssueFlags struct {
 	NoComments bool
 	CommentsN  int
 	Fields     string
+	FieldsOnly string
 	NoChildren bool
 	Parent     bool
 }
@@ -51,7 +52,8 @@ func NewIssueCmd() *cobra.Command {
 	c.Flags().BoolVar(&flags.NoHistory, "no-history", false, "Skip activity/changelog section")
 	c.Flags().BoolVar(&flags.NoComments, "no-comments", false, "Skip comments section")
 	c.Flags().IntVar(&flags.CommentsN, "comments", 1, "Number of latest comments to preview (max 25)")
-	c.Flags().StringVar(&flags.Fields, "fields", "", "Override field list (default/+add/-drop)")
+	c.Flags().StringVar(&flags.Fields, "fields", "", "Add/drop fields from the default set (e.g. \"description,reporter\" to add, \"-priority\" to drop)")
+	c.Flags().StringVar(&flags.FieldsOnly, "fields-only", "", "Restrict to exactly this comma-separated list (replaces defaults; mutually exclusive with --fields)")
 	c.Flags().BoolVar(&flags.NoChildren, "no-children", false, "Skip fetching the children list (one fewer API call)")
 	c.Flags().BoolVar(&flags.Parent, "parent", false, "Show the parent of <KEY> instead (Parent Link → Parent → Epic Link, in that order)")
 	return c
@@ -94,33 +96,24 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		flags.Parent = false // prevent infinite recursion
 	}
 
-	// Build field list; track whether it's a custom replacement so the renderer
-	// can skip sections whose fields were not fetched.
-	fields := jira.DefaultIssueFields
-	var fieldSet map[string]bool // nil = full default set
-	if flags.Fields != "" {
-		fields = resolveFieldList(jira.DefaultIssueFields, flags.Fields)
-		// Only build a restriction set when it's a full replacement (no +/- modifiers).
-		// Additive/subtractive specs stay close to the default and don't need this.
-		isReplacement := true
-		for _, t := range strings.Split(flags.Fields, ",") {
-			t = strings.TrimSpace(t)
-			if strings.HasPrefix(t, "+") || strings.HasPrefix(t, "-") {
-				isReplacement = false
-				break
-			}
-		}
-		if isReplacement {
-			fieldSet = make(map[string]bool)
-			for _, f := range strings.Split(fields, ",") {
-				fieldSet[strings.TrimSpace(f)] = true
-			}
-		}
+	// Build field list and optional restriction set for --fields-only.
+	if flags.FieldsOnly != "" && flags.Fields != "" {
+		return "", fmt.Errorf("--fields and --fields-only are mutually exclusive — choose one")
 	}
-	// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio populate.
-	// Only when fieldSet is nil (default or additive spec) — explicit replacement
-	// specs already express exactly what the user wants.
-	if fieldSet == nil {
+
+	fields := jira.DefaultIssueFields
+	var fieldSet map[string]bool // nil = full default set; non-nil only with --fields-only
+	if flags.FieldsOnly != "" {
+		fields = flags.FieldsOnly
+		fieldSet = make(map[string]bool)
+		for _, f := range strings.Split(flags.FieldsOnly, ",") {
+			fieldSet[strings.TrimSpace(f)] = true
+		}
+	} else {
+		if flags.Fields != "" {
+			fields = resolveFieldList(jira.DefaultIssueFields, flags.Fields)
+		}
+		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio populate.
 		for _, fid := range []string{
 			entry.Hierarchy.EpicLinkField,
 			entry.Hierarchy.PortfolioField,
@@ -289,43 +282,24 @@ func resolveParentKey(ctx context.Context, client *jira.Client, store *cache.Sto
 }
 
 
-// resolveFieldList applies +add / -drop / replace semantics to the default field list.
-// If spec has no leading +/-, it is treated as a full replacement.
-// Multiple comma-separated tokens may mix + and - with replacement segments.
+// resolveFieldList applies +add / -drop semantics to the default field list.
+// Bare names add. "+name" is accepted as an alias for "name". "-name" drops.
+// Replacement is no longer supported here — use the --fields-only flag.
 func resolveFieldList(defaultFields, spec string) string {
-	tokens := strings.Split(spec, ",")
-	// If every token starts with + or -, it's incremental; otherwise full replace.
-	allIncremental := true
-	for _, t := range tokens {
-		t = strings.TrimSpace(t)
-		if t != "" && t[0] != '+' && t[0] != '-' {
-			allIncremental = false
-			break
-		}
-	}
-	if !allIncremental {
-		return spec
-	}
-	// Build ordered set from defaults
 	defaults := strings.Split(defaultFields, ",")
 	set := make([]string, 0, len(defaults))
 	inSet := make(map[string]bool, len(defaults))
 	for _, f := range defaults {
+		f = strings.TrimSpace(f)
 		set = append(set, f)
 		inSet[f] = true
 	}
-	for _, t := range tokens {
+	for _, t := range strings.Split(spec, ",") {
 		t = strings.TrimSpace(t)
 		if t == "" {
 			continue
 		}
-		if strings.HasPrefix(t, "+") {
-			name := t[1:]
-			if !inSet[name] {
-				set = append(set, name)
-				inSet[name] = true
-			}
-		} else if strings.HasPrefix(t, "-") {
+		if strings.HasPrefix(t, "-") {
 			name := t[1:]
 			delete(inSet, name)
 			filtered := set[:0]
@@ -335,6 +309,12 @@ func resolveFieldList(defaultFields, spec string) string {
 				}
 			}
 			set = filtered
+			continue
+		}
+		name := strings.TrimPrefix(t, "+")
+		if !inSet[name] {
+			set = append(set, name)
+			inSet[name] = true
 		}
 	}
 	return strings.Join(set, ",")

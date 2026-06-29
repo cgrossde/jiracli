@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ type SearchFlags struct {
 	Page        int
 	ExcludeDone bool
 	Fields      string
+	FieldsOnly  string
 	Assigned    bool
 	Category    string
 }
@@ -67,7 +69,8 @@ Use --assigned to restrict results to the current user.`,
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Maximum results per page (1-100)")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().BoolVar(&flags.ExcludeDone, "exclude-done", false, "Exclude issues in the Done status category")
-	c.Flags().StringVar(&flags.Fields, "fields", "", `Field adjustments: "+field" to add, "-field" to drop, or "a,b,c" to replace`)
+	c.Flags().StringVar(&flags.Fields, "fields", "", `Add/drop fields from the default set: "name" or "+name" to add, "-name" to drop`)
+	c.Flags().StringVar(&flags.FieldsOnly, "fields-only", "", `Restrict fetched fields to exactly this comma-separated list (replaces defaults; mutually exclusive with --fields)`)
 	c.Flags().BoolVar(&flags.Assigned, "assigned", false, "Show only issues assigned to me")
 	c.Flags().StringVar(&flags.Category, "category", "", "Status category filter: todo, in-progress, done, all")
 	return c
@@ -115,8 +118,23 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 		effectiveJQL = jira.DefaultOpenFilter(jql)
 	}
 
-	// Resolve fields.
-	fields := resolveSearchFields(flags.Fields)
+	// Resolve fields — mutex check first (no I/O needed to reject).
+	if flags.FieldsOnly != "" && flags.Fields != "" {
+		return "", fmt.Errorf("--fields and --fields-only are mutually exclusive — choose one")
+	}
+	var fields []string
+	if flags.FieldsOnly != "" {
+		parts := strings.Split(flags.FieldsOnly, ",")
+		fields = make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				fields = append(fields, p)
+			}
+		}
+	} else {
+		fields = resolveSearchFields(flags.Fields)
+	}
 
 	// Clamp page.
 	page := flags.Page
@@ -139,52 +157,30 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 	if flags.JSON {
 		return renderSearchJSON(resp, page, limit)
 	}
-	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags)
+	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags, fields)
 }
 
-// resolveSearchFields applies the --fields spec to the default search field list.
-// Spec forms:
-//   - empty → default set
-//   - "a,b,c" (no +/-) → replace entirely
-//   - "+a,+b,-c" → add/remove from default
+// resolveSearchFields applies +add / -drop semantics to defaultSearchFields.
+// Bare names add. "+name" is accepted as an alias for "name". "-name" drops.
+// Replacement is no longer supported here — use the --fields-only flag.
 func resolveSearchFields(spec string) []string {
-	if spec == "" {
-		return defaultSearchFields
-	}
-	tokens := strings.Split(spec, ",")
-	// Check if any token starts with + or -
-	hasModifier := false
-	for _, t := range tokens {
-		t = strings.TrimSpace(t)
-		if strings.HasPrefix(t, "+") || strings.HasPrefix(t, "-") {
-			hasModifier = true
-			break
-		}
-	}
-	if !hasModifier {
-		// Replacement mode.
-		out := make([]string, 0, len(tokens))
-		for _, t := range tokens {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				out = append(out, t)
-			}
-		}
-		return out
-	}
-	// Add/remove mode: start from defaults.
 	set := make([]string, len(defaultSearchFields))
 	copy(set, defaultSearchFields)
-	for _, t := range tokens {
+	if spec == "" {
+		return set
+	}
+	for _, t := range strings.Split(spec, ",") {
 		t = strings.TrimSpace(t)
-		if strings.HasPrefix(t, "+") {
-			field := strings.TrimPrefix(t, "+")
-			if field != "" && !containsStr(set, field) {
-				set = append(set, field)
-			}
-		} else if strings.HasPrefix(t, "-") {
-			field := strings.TrimPrefix(t, "-")
-			set = removeStr(set, field)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "-") {
+			set = removeStr(set, t[1:])
+			continue
+		}
+		name := strings.TrimPrefix(t, "+")
+		if !containsStr(set, name) {
+			set = append(set, name)
 		}
 	}
 	return set
@@ -366,7 +362,7 @@ func sectionLabel(s string) string {
 // renderSearchPlain renders human-readable search output.
 // The drill-down hint is shown once before the list (first item) and once in
 // the footer (last item) so an LLM sees it whether it reads the head or tail.
-func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL string, page, limit int, flags SearchFlags) (string, error) {
+func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL string, page, limit int, flags SearchFlags, fields []string) (string, error) {
 	var sb strings.Builder
 	pages := totalPages(resp.Total, limit)
 	if pages == 0 {
@@ -407,6 +403,12 @@ func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL strin
 		fmt.Fprintf(&sb, "    Prio: %s  Assignee: %s  Updated: %s ago\n",
 			colorPriority(priority),
 			assignee, updated)
+		// Line 3 (optional): description preview
+		if containsStr(fields, "description") {
+			if preview := descPreview(raw.Fields.Description); preview != "" {
+				fmt.Fprintf(&sb, "    %s\n", preview)
+			}
+		}
 		sb.WriteByte('\n')
 	}
 
@@ -440,6 +442,56 @@ func parseUpdated(raw string, now time.Time) string {
 	return jira.FormatRelative(t, now)
 }
 
+const descPreviewLen = 100
+
+var (
+	// descMacroRe strips ALL Jira {macro} and {macro:params} tags (panel, color, code, noformat, …).
+	descMacroRe = regexp.MustCompile(`\{[a-zA-Z][^}]*\}`)
+	// descFmtRe strips symmetric inline-formatting markers: *bold*, _italic_, +underline+, -strike-.
+	descFmtRe = regexp.MustCompile(`[*_+\-]([^*_+\-\n]+)[*_+\-]`)
+	// descStrayFmtRe strips bare unmatched opening markers (e.g. *Text with no closing *).
+	// RE2 has no lookbehind; captures (space|^) and first word char, drops the marker.
+	descStrayFmtRe = regexp.MustCompile(`(^|\s)[*_+](\S)`)
+	descLineMarkerRe = regexp.MustCompile(`(?m)^\s*[*#+\-]+\s+`)
+	descLinkRe       = regexp.MustCompile(`\[([^\]|]+)\|[^\]]+\]|\[([^\]]+)\]`)
+	whitespaceRunRe  = regexp.MustCompile(`  +`)
+)
+
+// descPreview produces a single-line preview of a Jira wiki-markup description.
+// Strips block delimiters, collapses whitespace, drops leading list bullets,
+// rewrites [text|url] / [url] link forms to their text equivalent, and
+// truncates to descPreviewLen runes with an ellipsis when clipped.
+// Returns "" if the result is empty after stripping.
+func descPreview(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Strip ALL Jira {macro} / {macro:params} tags (panel, color, code, noformat, …).
+	s = descMacroRe.ReplaceAllString(s, "")
+	// Strip inline formatting markers (*bold*, _italic_, +underline+, -strike-) — keep text.
+	s = descFmtRe.ReplaceAllString(s, "$1")
+	// Strip bare unmatched opening markers left after macro removal (e.g. *Text without closing).
+	s = descStrayFmtRe.ReplaceAllString(s, "$1$2")
+	// Strip leading list-marker runs (*, #, -, +) at line start.
+	s = descLineMarkerRe.ReplaceAllString(s, "")
+	// Resolve wiki links: [text|url] → "text"; [url] → "url".
+	s = descLinkRe.ReplaceAllStringFunc(s, func(m string) string {
+		sub := descLinkRe.FindStringSubmatch(m)
+		if sub[1] != "" {
+			return sub[1]
+		}
+		return sub[2]
+	})
+	// Normalise whitespace.
+	s = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\t", " ", "\u00a0", " ").Replace(s)
+	s = whitespaceRunRe.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return jira.TruncateString(s, descPreviewLen)
+}
+
 // buildNextPageCmd reconstructs the jiracli search command for the next page.
 func buildNextPageCmd(jql string, nextPage, limit int, flags SearchFlags) string {
 	var parts []string
@@ -459,6 +511,9 @@ func buildNextPageCmd(jql string, nextPage, limit int, flags SearchFlags) string
 	}
 	if flags.Fields != "" {
 		parts = append(parts, fmt.Sprintf("--fields %q", flags.Fields))
+	}
+	if flags.FieldsOnly != "" {
+		parts = append(parts, fmt.Sprintf("--fields-only %q", flags.FieldsOnly))
 	}
 	if flags.Profile != "" {
 		parts = append(parts, fmt.Sprintf("--profile %s", flags.Profile))

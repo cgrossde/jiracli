@@ -19,11 +19,12 @@ type HierarchyNode struct {
 
 // HierarchyChain is the full Initiative → … → Subject → Children chain.
 type HierarchyChain struct {
-	Ancestors     []HierarchyNode `json:"ancestors"`
-	Subject       HierarchyNode   `json:"subject"`
-	Children      []HierarchyNode `json:"children"`
-	ChildrenTotal int             `json:"childrenTotal"`
-	ChildrenError string          `json:"childrenError,omitempty"`
+	Ancestors          []HierarchyNode `json:"ancestors"`
+	Subject            HierarchyNode   `json:"subject"`
+	Children           []HierarchyNode `json:"children"`
+	ChildrenTotal      int             `json:"childrenTotal"`
+	ChildrenTruncated  bool            `json:"childrenTruncated,omitempty"`
+	ChildrenError      string          `json:"childrenError,omitempty"`
 }
 
 // maxAncestorDepth caps walks to defend against cyclical/long Parent Link chains.
@@ -44,6 +45,7 @@ func BuildHierarchy(
 	hf HierarchyFieldIDs,
 	portfolioFieldName string,
 	key string,
+	fetchAll bool,
 ) (HierarchyChain, error) {
 	// Build the base fields list for the subject fetch.
 	baseFieldSlice := []string{"summary", "status", "issuetype", "assignee", "subtasks", "parent"}
@@ -105,24 +107,40 @@ func BuildHierarchy(
 	childrenError := ""
 
 	childFields := []string{"summary", "status", "issuetype", "assignee"}
+
+	// fetch wraps fetchAllChildren / single-page based on the fetchAll flag.
+	fetch := func(jql string) ([]HierarchyNode, int, error) {
+		if fetchAll {
+			return fetchAllChildren(ctx, c, jql, childFields)
+		}
+		resp, err := c.Search(ctx, jql, 1, 100, childFields)
+		if err != nil {
+			return nil, 0, err
+		}
+		var nodes []HierarchyNode
+		for _, issue := range resp.Issues {
+			nodes = append(nodes, nodeFromRaw(issue))
+		}
+		return nodes, resp.Total, nil
+	}
+
+	truncated := false
 	switch strings.ToLower(subject.IssueType) {
 	case "epic":
 		// Classic projects: children linked via Epic Link custom field.
-		jql := `"Epic Link" = ` + key
-		resp, err := c.Search(ctx, jql, 1, 100, childFields)
-		if err != nil || resp.Total == 0 {
+		kids, total, err := fetch(`"Epic Link" = ` + key)
+		if err != nil || total == 0 {
 			// Next-gen / team-managed projects: children linked via built-in parent field.
-			if resp2, err2 := c.Search(ctx, `parent = `+key, 1, 100, childFields); err2 == nil && resp2.Total > 0 {
-				resp, err = resp2, nil
+			if kids2, total2, err2 := fetch(`parent = ` + key); err2 == nil && total2 > 0 {
+				kids, total, err = kids2, total2, nil
 			}
 		}
 		if err != nil {
 			childrenError = err.Error()
 		} else {
-			childrenTotal = resp.Total
-			for _, issue := range resp.Issues {
-				children = append(children, nodeFromRaw(issue))
-			}
+			children = kids
+			childrenTotal = total
+			truncated = !fetchAll && total > len(kids)
 		}
 	default:
 		// Portfolio-level issue: only attempt JQL if the subject's type name
@@ -130,33 +148,29 @@ func BuildHierarchy(
 		// This avoids firing JQL on Stories, Bugs, Tasks, etc.
 		if isPortfolioTypeLevel(subject.IssueType) {
 			// Try Parent Link field first (= operator, exact match).
-			// On many instances Epics are attached to Initiatives via Parent Link.
-			if hf.ParentLink != "" && childrenTotal == 0 && childrenError == "" {
+			if hf.ParentLink != "" {
 				jql := `cf[` + strings.TrimPrefix(hf.ParentLink, "customfield_") + `] = ` + key
-				resp, err := c.Search(ctx, jql, 1, 100, childFields)
-				if err == nil && resp.Total > 0 {
-					childrenTotal = resp.Total
-					for _, issue := range resp.Issues {
-						children = append(children, nodeFromRaw(issue))
-					}
+				if kids, total, err := fetch(jql); err == nil && total > 0 {
+					children = kids
+					childrenTotal = total
+					truncated = !fetchAll && total > len(kids)
 				}
 			}
 			// Try portfolio display-name field (~ operator, text match).
-			if portfolioFieldName != "" && childrenTotal == 0 && childrenError == "" {
+			if portfolioFieldName != "" && childrenTotal == 0 {
 				jql := `"` + portfolioFieldName + `" ~ "` + key + `"`
-				resp, err := c.Search(ctx, jql, 1, 100, childFields)
+				kids, total, err := fetch(jql)
 				if err != nil {
 					childrenError = err.Error()
-				} else if resp.Total > 0 {
-					childrenTotal = resp.Total
-					for _, issue := range resp.Issues {
-						children = append(children, nodeFromRaw(issue))
-					}
+				} else if total > 0 {
+					children = kids
+					childrenTotal = total
+					truncated = !fetchAll && total > len(kids)
 				}
 			}
 		}
 		if childrenTotal == 0 && childrenError == "" {
-			// Fall back to subtasks.
+			// Fall back to subtasks (already fully fetched inline with the subject).
 			for _, s := range subjectRaw.Fields.Subtasks {
 				a := ""
 				if s.Fields.Assignee != nil {
@@ -182,11 +196,12 @@ func BuildHierarchy(
 		children = []HierarchyNode{}
 	}
 	return HierarchyChain{
-		Ancestors:     ancestors,
-		Subject:       subject,
-		Children:      children,
-		ChildrenTotal: childrenTotal,
-		ChildrenError: childrenError,
+		Ancestors:         ancestors,
+		Subject:           subject,
+		Children:          children,
+		ChildrenTotal:     childrenTotal,
+		ChildrenTruncated: truncated,
+		ChildrenError:     childrenError,
 	}, nil
 }
 
@@ -243,6 +258,36 @@ func nodeFromRaw(raw IssueRaw) HierarchyNode {
 		Assignee:       a,
 	}
 }
+
+// fetchAllChildren executes jql in pages of 100 until all results are collected.
+// Returns the full slice of nodes, the server-reported total, and any error.
+// On the first-page error the error is returned immediately.
+// On a mid-pagination error we return what we have so far with no error (fail-soft).
+func fetchAllChildren(ctx context.Context, c *Client, jql string, fields []string) ([]HierarchyNode, int, error) {
+	const pageSize = 100
+	var nodes []HierarchyNode
+	total := 0
+	for page := 1; ; page++ {
+		resp, err := c.Search(ctx, jql, page, pageSize, fields)
+		if err != nil {
+			if page == 1 {
+				return nil, 0, err
+			}
+			// Mid-pagination failure: return what we have.
+			break
+		}
+		total = resp.Total
+		for _, issue := range resp.Issues {
+			nodes = append(nodes, nodeFromRaw(issue))
+		}
+		fetched := (page-1)*pageSize + len(resp.Issues)
+		if fetched >= total {
+			break
+		}
+	}
+	return nodes, total, nil
+}
+
 // FieldProbe holds the result of a live diagnostic test for one hierarchy field.
 type FieldProbe struct {
 	Label     string // "Epic Link", "Parent Link", "Portfolio"

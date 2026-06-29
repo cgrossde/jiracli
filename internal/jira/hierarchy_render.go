@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-// childrenDisplayLimit is the max number of child rows in a rendered hierarchy.
-const childrenDisplayLimit = 15
 
 // RenderHierarchy returns the plain or colored tree representation.
 // colorEnabled controls ANSI; pass ColorsEnabled()-style boolean from the caller.
@@ -48,27 +46,17 @@ func RenderHierarchy(chain HierarchyChain, colorEnabled bool) string {
 		return !iDone && jDone
 	})
 
-	// Cap at display limit.
-	display := sorted
-	if len(sorted) > childrenDisplayLimit {
-		display = sorted[:childrenDisplayLimit]
-	}
-
-	for i, ch := range display {
+	for i, ch := range sorted {
 		connector := "├─"
-		if i == len(display)-1 && len(chain.Children) <= childrenDisplayLimit {
+		if i == len(sorted)-1 && !chain.ChildrenTruncated {
 			connector = "└─"
 		}
 		writeChildRow(&sb, ch, connector, colorEnabled)
 	}
 
-	// Overflow hint.
-	if len(chain.Children) > childrenDisplayLimit || chain.ChildrenTotal > len(chain.Children) {
-		remaining := chain.ChildrenTotal - childrenDisplayLimit
-		if remaining < 0 {
-			remaining = chain.ChildrenTotal - len(chain.Children)
-		}
-		fmt.Fprintf(&sb, "   … %d more\n", remaining)
+	if chain.ChildrenTruncated {
+		remaining := chain.ChildrenTotal - len(chain.Children)
+		fmt.Fprintf(&sb, "   … %d more — rerun with --all to fetch everything\n", remaining)
 	}
 
 	return sb.String()

@@ -87,7 +87,7 @@ Full reference: **[`docs/`](docs/README.md)** — setup, read commands, writes, 
 jiracli show PROJ-123                          # full issue with activity
 jiracli show PROJ-123 --no-history             # skip changelog
 jiracli show PROJ-123 --comments 5             # inline last 5 comments
-jiracli show PROJ-123 --fields "+description"  # add description to the default view
+jiracli show PROJ-123 --fields "description"  # add description to the default view
 
 jiracli show comments PROJ-123                 # full comment thread
 jiracli show history PROJ-123 --since 7d       # changelog, last 7 days

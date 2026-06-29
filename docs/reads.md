@@ -49,10 +49,10 @@ When a hierarchy configuration exists for the profile (set via `setup` or `confi
 
 ### `--fields` spec
 
-- **Replace:** `--fields "key,status,assignee"` — shows only those columns.
-- **Add to default:** `--fields "+description,+reporter"` — appends to the default set.
+- **Add to default:** `--fields "description,reporter"` — adds those fields to the default set. (`+description` is accepted as an alias.)
 - **Drop from default:** `--fields "-assignee,-priority"`.
-- **Mixed:** `--fields "+timetracking,-priority"`.
+- **Mixed:** `--fields "timetracking,-priority"`.
+- **Restrict to a fixed set:** `--fields-only "key,summary,description"` — fetches and renders exactly those fields. Mutually exclusive with `--fields`.
 
 Field names match Jira's own field IDs as returned by `jiracli lookup fields`. Custom fields accepted by name (`team`) or id (`customfield_10031`).
 
@@ -205,7 +205,8 @@ Multiple positional arguments are joined with a space. JQL should be quoted to a
 | `--exclude-done` | false | Exclude issues in the Done status category |
 | `--category <cat>` | — | Filter by status category: `todo`, `in-progress`, `done`, `all` |
 | `--assigned` | false | Restrict to issues assigned to the current user |
-| `--fields <spec>` | — | Column adjustments (same syntax as `issue`) |
+| `--fields <spec>` | — | Add/drop columns: bare name or `+name` to add, `-name` to drop |
+| `--fields-only <list>` | — | Restrict to exactly these fields (replaces defaults; mutex with `--fields`) |
 | `--json` | false | NDJSON output |
 | `--profile <name>` | default | Credential profile |
 
@@ -219,20 +220,35 @@ The effective JQL is always echoed on the first line of plain-text output. `stat
 
 `key, status, type, priority, assignee, updated, summary`
 
-`--fields` spec overrides in the same way as `issue`. `type` renders from `issueType`; the NDJSON field is `issueType`.
+`--fields` adds to the default columns: `--fields "description"` includes a third line per result with a single-line, ~100-character preview. Combine with comma syntax: `--fields "description,reporter,fixVersions"`. `--fields-only "key,summary,description"` restricts to exactly those fields (mutex with `--fields`). `type` renders from `issueType`; the NDJSON field is `issueType`.
 
 ### Plain-text output shape
 
 ```
 search: (<effective JQL>)
 total: 14  page: 1/1
-columns: key  status  type  prio  assignee  ↻updated  summary
+→ jiracli show WEB-812  # (and any key below)
 
-[1] WEB-812  In Progress  Bug  High  Alex Chen  ↻ 2d  Summary text
-    → jiracli show WEB-812
+[1] Bug  WEB-812  Summary text                                    In Progress
+    Prio: High  Assignee: Alex Chen  Updated: 2d ago
 
-[2] WEB-799  Open  Story  Medium  —  ↻ 5d  Summary text
-    → jiracli show WEB-799
+[2] Story  WEB-799  Summary text                                  Open
+    Prio: Medium  Assignee: —  Updated: 5d ago
+
+→ jiracli show WEB-799  # (and any key above)
+--- page 1 of 1 ---
+[exit:0 | Xms]
+```
+
+With `--fields "description"`, a third line per issue shows a description preview (4-space indent, ≤100 chars, ending in `…` if clipped):
+
+```
+[1] Bug  WEB-812  Summary text                                    In Progress
+    Prio: High  Assignee: Alex Chen  Updated: 2d ago
+    Fix the login page for users with long email addresses so tha…
+
+[2] Story  WEB-799  Summary text                                  Open
+    Prio: Medium  Assignee: —  Updated: 5d ago
 
 --- page 1 of 1 ---
 [exit:0 | Xms]
@@ -249,7 +265,7 @@ The next-page command includes every active flag (`--exclude-done`, `--fields`, 
 One object per issue, then an optional `_pagination` trailer when more pages exist:
 
 ```ndjson
-{"key":"WEB-812","summary":"...","status":"In Progress","statusCategory":"In Progress","assignee":{"name":"u1","displayName":"Alex Chen"},"priority":"High","issueType":"Bug","updated":"...","labels":[...],"components":[...]}
+{"key":"WEB-812","summary":"...","description":"Fix the login page…","status":"In Progress","statusCategory":"In Progress","assignee":{"name":"u1","displayName":"Alex Chen"},"priority":"High","issueType":"Bug","updated":"...","labels":[...],"components":[...]}
 {"_pagination":{"page":1,"pages":5,"total":217,"next_page":2,"has_more":true}}
 ```
 

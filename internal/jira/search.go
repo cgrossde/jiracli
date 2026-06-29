@@ -62,14 +62,17 @@ func (c *Client) Search(ctx context.Context, jql string, page, limit int, fields
 type SearchIssueRecord struct {
 	Key            string        `json:"key"`
 	Summary        string        `json:"summary"`
+	Description    string        `json:"description,omitempty"`
 	Status         string        `json:"status"`
 	StatusCategory string        `json:"statusCategory"`
 	Assignee       *IssueUserRef `json:"assignee"`
+	Reporter       *IssueUserRef `json:"reporter,omitempty"`
 	Priority       string        `json:"priority"`
 	IssueType      string        `json:"issueType"`
 	Updated        string        `json:"updated"`
 	Labels         []string      `json:"labels"`
 	Components     []string      `json:"components"`
+	FixVersions    []string      `json:"fixVersions,omitempty"`
 }
 
 // SearchPaginationTrailer is emitted as the final NDJSON line when more pages exist.
@@ -88,6 +91,7 @@ func ToSearchRecord(raw IssueRaw) SearchIssueRecord {
 	rec := SearchIssueRecord{
 		Key:            raw.Key,
 		Summary:        raw.Fields.Summary,
+		Description:    raw.Fields.Description,
 		Status:         raw.Fields.Status.Name,
 		StatusCategory: raw.Fields.Status.StatusCategory.Name,
 		IssueType:      raw.Fields.IssueType.Name,
@@ -115,6 +119,21 @@ func ToSearchRecord(raw IssueRaw) SearchIssueRecord {
 		components = append(components, c.Name)
 	}
 	rec.Components = components
+
+	if raw.Fields.Reporter != nil {
+		rec.Reporter = &IssueUserRef{
+			Name:        raw.Fields.Reporter.Name,
+			DisplayName: raw.Fields.Reporter.DisplayName,
+		}
+	}
+
+	fixVersions := make([]string, 0, len(raw.Fields.FixVersions))
+	for _, fv := range raw.Fields.FixVersions {
+		fixVersions = append(fixVersions, fv.Name)
+	}
+	if len(fixVersions) > 0 {
+		rec.FixVersions = fixVersions
+	}
 
 	return rec
 }
