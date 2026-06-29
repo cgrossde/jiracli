@@ -118,19 +118,33 @@ func BuildHierarchy(
 			}
 		}
 	default:
-		// Portfolio-level issue: only attempt the JQL if the subject's type name
+		// Portfolio-level issue: only attempt JQL if the subject's type name
 		// matches a known portfolio-level pattern (initiative, program, feature, theme, portfolio).
-		// This avoids firing the JQL on Stories, Bugs, Tasks, etc. that simply have
-		// no portfolio parent of their own.
-		if portfolioFieldName != "" && isPortfolioTypeLevel(subject.IssueType) {
-			jql := `"` + portfolioFieldName + `" ~ "` + key + `"`
-			resp, err := c.Search(ctx, jql, 1, 100, childFields)
-			if err != nil {
-				childrenError = err.Error()
-			} else if resp.Total > 0 {
-				childrenTotal = resp.Total
-				for _, issue := range resp.Issues {
-					children = append(children, nodeFromRaw(issue))
+		// This avoids firing JQL on Stories, Bugs, Tasks, etc.
+		if isPortfolioTypeLevel(subject.IssueType) {
+			// Try Parent Link field first (= operator, exact match).
+			// On many instances Epics are attached to Initiatives via Parent Link.
+			if hf.ParentLink != "" && childrenTotal == 0 && childrenError == "" {
+				jql := `cf[` + strings.TrimPrefix(hf.ParentLink, "customfield_") + `] = ` + key
+				resp, err := c.Search(ctx, jql, 1, 100, childFields)
+				if err == nil && resp.Total > 0 {
+					childrenTotal = resp.Total
+					for _, issue := range resp.Issues {
+						children = append(children, nodeFromRaw(issue))
+					}
+				}
+			}
+			// Try portfolio display-name field (~ operator, text match).
+			if portfolioFieldName != "" && childrenTotal == 0 && childrenError == "" {
+				jql := `"` + portfolioFieldName + `" ~ "` + key + `"`
+				resp, err := c.Search(ctx, jql, 1, 100, childFields)
+				if err != nil {
+					childrenError = err.Error()
+				} else if resp.Total > 0 {
+					childrenTotal = resp.Total
+					for _, issue := range resp.Issues {
+						children = append(children, nodeFromRaw(issue))
+					}
 				}
 			}
 		}
