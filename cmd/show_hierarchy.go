@@ -15,6 +15,7 @@ type ShowHierarchyFlags struct {
 	Profile string
 	JSON    bool
 	All     bool
+	Status  string // "", "open", "closed", "not-closed"
 }
 
 // NewShowHierarchyCmd builds the "show hierarchy" subcommand.
@@ -41,6 +42,7 @@ hint — run 'jiracli setup --reconfigure' or 'jiracli config hierarchy'.`,
 	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
 	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON (one object: the full chain)")
 	c.Flags().BoolVar(&flags.All, "all", false, "Fetch all children (bypasses the 100-result default cap)")
+	c.Flags().StringVar(&flags.Status, "status", "", "Filter children by status category: open, closed, not-closed")
 	return c
 }
 
@@ -74,5 +76,5 @@ func ShowHierarchy(ctx context.Context, flags ShowHierarchyFlags, ref string) (s
 		}
 		return string(data) + "\n", nil
 	}
-	return jira.RenderHierarchy(chain, jira.ColorsEnabled()), nil
+	return jira.RenderHierarchy(chain, jira.ColorsEnabled(), flags.Status), nil
 }

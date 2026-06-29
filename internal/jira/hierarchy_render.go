@@ -9,11 +9,16 @@ import (
 
 // RenderHierarchy returns the plain or colored tree representation.
 // colorEnabled controls ANSI; pass ColorsEnabled()-style boolean from the caller.
-func RenderHierarchy(chain HierarchyChain, colorEnabled bool) string {
+// statusFilter optionally limits which children are shown:
+//
+//	""           — show all (default)
+//	"open"       — To Do + In Progress (statusCategory != "Done")
+//	"closed"     — Done only
+//	"not-closed" — alias for "open"
+func RenderHierarchy(chain HierarchyChain, colorEnabled bool, statusFilter string) string {
 	var sb strings.Builder
 
 	if len(chain.Ancestors) == 0 && len(chain.Children) == 0 {
-		// Subject row.
 		writeSubjectRow(&sb, chain.Subject, colorEnabled)
 		sb.WriteString("(standalone issue — no parent or children)\n")
 		return sb.String()
@@ -46,20 +51,61 @@ func RenderHierarchy(chain HierarchyChain, colorEnabled bool) string {
 		return !iDone && jDone
 	})
 
-	for i, ch := range sorted {
+	// Apply status filter.
+	visible := filterChildren(sorted, statusFilter)
+
+	if len(visible) == 0 {
+		hidden := len(sorted)
+		fmt.Fprintf(&sb, "  (no children match filter %q — %d hidden)\n", statusFilter, hidden)
+		return sb.String()
+	}
+
+	// ChildrenTruncated refers to the unfiltered fetch cap; if filtering is
+	// active we can't know how many server-side results match, so suppress it.
+	truncated := chain.ChildrenTruncated && statusFilter == ""
+
+	for i, ch := range visible {
 		connector := "├─"
-		if i == len(sorted)-1 && !chain.ChildrenTruncated {
+		if i == len(visible)-1 && !truncated {
 			connector = "└─"
 		}
 		writeChildRow(&sb, ch, connector, colorEnabled)
 	}
 
-	if chain.ChildrenTruncated {
+	if truncated {
 		remaining := chain.ChildrenTotal - len(chain.Children)
 		fmt.Fprintf(&sb, "   … %d more — rerun with --all to fetch everything\n", remaining)
+	} else if statusFilter != "" && len(visible) < len(sorted) {
+		hidden := len(sorted) - len(visible)
+		fmt.Fprintf(&sb, "   (%d hidden by --%s filter)\n", hidden, statusFilter)
 	}
 
 	return sb.String()
+}
+
+// filterChildren returns children matching the statusFilter.
+// Empty filter returns the slice unchanged.
+func filterChildren(children []HierarchyNode, statusFilter string) []HierarchyNode {
+	switch strings.ToLower(statusFilter) {
+	case "open", "not-closed":
+		out := children[:0:0]
+		for _, ch := range children {
+			if !strings.EqualFold(ch.StatusCategory, "Done") {
+				out = append(out, ch)
+			}
+		}
+		return out
+	case "closed":
+		out := children[:0:0]
+		for _, ch := range children {
+			if strings.EqualFold(ch.StatusCategory, "Done") {
+				out = append(out, ch)
+			}
+		}
+		return out
+	default:
+		return children
+	}
 }
 
 // writeAncestorRow writes a single dim ancestor row.
