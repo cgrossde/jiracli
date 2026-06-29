@@ -376,6 +376,42 @@ func parseISODateTime(s string) time.Time {
 	return t
 }
 
+// relativeAge returns a human-readable age string for t relative to now,
+// e.g. "just now", "5m ago", "3h ago", "2d ago", "6mo ago", "2y ago".
+func relativeAge(t time.Time) string {
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy ago", int(d.Hours()/(24*365)))
+	}
+}
+
+// dateWithAge parses an ISO8601 string and returns "YYYY-MM-DD (age)".
+func dateWithAge(s string) string {
+	date := parseISODate(s)
+	if date == "" {
+		return ""
+	}
+	t := parseISODateTime(s)
+	if t.IsZero() {
+		return date
+	}
+	return date + " (" + relativeAge(t) + ")"
+}
+
 // fieldIn returns true when fieldSet is nil (full default) or contains the given field name.
 func fieldIn(fieldSet map[string]bool, name string) bool {
 	return fieldSet == nil || fieldSet[name]
@@ -427,9 +463,9 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 				sectionLabel("Reporter:"), reporter)
 		}
 		if showDates {
-			createdDate := parseISODate(rec.Created)
-			updatedDate := parseISODate(rec.Updated)
-			fmt.Fprintf(&sb, "%s %-30s %s %s\n",
+			createdDate := dateWithAge(rec.Created)
+			updatedDate := dateWithAge(rec.Updated)
+			fmt.Fprintf(&sb, "%s %-32s %s %s\n",
 				sectionLabel("Created:"), createdDate,
 				sectionLabel("Updated:"), updatedDate)
 		}
