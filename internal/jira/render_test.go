@@ -172,6 +172,16 @@ func TestAbbreviateChange(t *testing.T) {
 			field: "Comment", from: longComment, to: longComment,
 			want: "Comment: " + strings.Repeat("y", 120) + "… → " + strings.Repeat("y", 120) + "…",
 		},
+		{
+			name:  "comment both empty — added a comment",
+			field: "Comment", from: "", to: "",
+			want: "Comment: added",
+		},
+		{
+			name:  "comment lowercase both empty — added a comment",
+			field: "comment", from: "", to: "",
+			want: "Comment: added",
+		},
 		// environment truncated
 		{
 			name:  "environment long — truncated at 120",

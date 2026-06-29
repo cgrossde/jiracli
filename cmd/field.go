@@ -136,11 +136,22 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 			}
 			if !found && !flags.AllowNew {
 				var names []string
+				var suggestions []string
+				ql := strings.ToLower(value)
 				for _, p := range priorities {
 					names = append(names, p.Name)
+					// Fuzzy match: priority name contains the user's input as a substring.
+					// e.g. "High" matches "2 - High".
+					if strings.Contains(strings.ToLower(p.Name), ql) {
+						suggestions = append(suggestions, p.Name)
+					}
 				}
-				return "", fmt.Errorf("unknown priority %q for project %s\nAvailable: %s\nRun: jiracli lookup priorities --project %s",
+				msg := fmt.Sprintf("unknown priority %q for project %s\nAvailable: %s\nRun: jiracli lookup priorities --project %s",
 					value, projectKey, strings.Join(names, ", "), projectKey)
+				if len(suggestions) > 0 {
+					msg += fmt.Sprintf("\nDid you mean: %s?", strings.Join(suggestions, ", "))
+				}
+				return "", fmt.Errorf("%s", msg)
 			}
 			fieldsBlock["priority"] = map[string]string{"name": value}
 			validation = append(validation, jira.ValidationRow{

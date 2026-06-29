@@ -320,7 +320,9 @@ var truncateField = map[string]bool{
 //
 // Rules:
 //   - description: always "description: updated" (body never shown)
-//   - comment, environment, summary: truncated to 120 chars per side
+//   - Comment/comment: Jira omits bodies in changelog; render as "added a comment"
+//     when both sides are empty, otherwise truncated to 120 chars per side
+//   - environment, summary: truncated to 120 chars per side
 //   - everything else: shown in full
 //
 // statusMarker is appended verbatim (used for the " ↩" regression marker).
@@ -335,6 +337,15 @@ func AbbreviateChange(field, from, to string, statusMarker string) string {
 		default:
 			return field + ": updated"
 		}
+	}
+
+	// Comment fields: Jira changelog never includes comment bodies, so from/to
+	// are always empty. Render a human-readable summary instead of "(none) → (none)".
+	if strings.EqualFold(field, "comment") {
+		if from == "" && to == "" {
+			return "Comment: added"
+		}
+		// Bodies present (hypothetical future case) — fall through to truncated render.
 	}
 
 	// Truncated fields: clip each side to activityTruncateLen.

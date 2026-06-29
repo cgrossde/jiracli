@@ -111,14 +111,17 @@ One record per issue. Produced by `internal/jira.SearchIssueRecord` (`internal/j
 {
   "key":            "ACME-123",
   "summary":        "Fix login redirect",
+  "description":    "Steps to reproduce...",
   "status":         "In Progress",
   "statusCategory": "In Progress",
   "assignee":       { "name": "u1", "displayName": "Alex Chen" },
+  "reporter":       { "name": "u2", "displayName": "Sam Lee" },
   "priority":       "High",
   "issueType":      "Bug",
   "updated":        "2026-06-20T14:30:00.000+0000",
   "labels":         ["backend"],
-  "components":     ["Login"]
+  "components":     ["Login"],
+  "fixVersions":    ["4.5.0"]
 }
 ```
 
@@ -134,6 +137,9 @@ The trailer is **omitted** when all results fit on the current page.
 - `assignee`: `null` when unassigned.
 - `updated`: raw Jira timestamp string (`"2006-01-02T15:04:05.000-0700"` format).
 - `labels`, `components`: empty array `[]` when absent.
+- `description`: string; omitted (`omitempty`) when empty. Populated when `--fields "description"` (or `--fields-only`) is passed.
+- `reporter`: `IssueUserRef` (`name`, `displayName`); omitted (`omitempty`) when the issue has no reporter or when `reporter` is not in the fetched field set.
+- `fixVersions`: string array; omitted (`omitempty`) when empty or not fetched.
 
 ---
 
@@ -270,7 +276,7 @@ One record per invocation. Produced inline in `cmd/me.go`.
 
 ## hierarchy
 
-Command: `jiracli show hierarchy <KEY> [--json]`
+Command: `jiracli show hierarchy <KEY> [--json] [--depth N] [--flat] [--since <date>]`
 
 One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal/jira/hierarchy.go`).
 
@@ -318,15 +324,19 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
       "assignee":       "John Doe"
     }
   ],
-  "childrenTotal": 2
+  "childrenTotal": 2,
+  "descendantsTruncated": false
 }
 ```
 
 **Field notes:**
 - `ancestors`: array of nodes, root-first (Initiative at index 0, Epic at index N-1). Empty array `[]` when the subject has no ancestors.
 - `subject`: the issue passed as the argument. Always has `"isSubject": true`.
-- `children`: up to 100 nodes. For Epics: issues where `Epic Link = KEY`. For portfolio-level types: issues where `"<portfolioFieldName>" = KEY`. Otherwise: subtasks inline from the subject's response (no extra API call).
-- `childrenTotal`: total server-side count; may exceed `len(children)` for large Epics.
+- `children`: up to 100 nodes at depth=1. For Epics: issues where `Epic Link = KEY`. For portfolio-level types: issues where `"<portfolioFieldName>" = KEY`. Otherwise: subtasks inline from the subject's response (no extra API call). With `--depth N` (N ≥ 2), each child node may carry a nested `"children"` array of its own — the field is `omitempty` so depth-1 output is byte-for-byte identical to today's (no `children` keys on level-1 nodes).
+- `childrenTotal`: total server-side count at level 1; may exceed `len(children)` for large Epics. Descendants at level 2+ are not counted here.
 - `childrenError`: string; omitted (`omitempty`) when empty. When set, `children` is empty and the error describes why the search failed.
 - Node `assignee`: display-name string; omitted (`omitempty`) when unassigned or for ancestor rows.
 - Node `isSubject`: `true` only on the subject node; omitted on all other nodes.
+- Node `children` (recursive): present only when `--depth N` is ≥ 2. `omitempty` — absent on nodes whose children were not fetched or are empty. A depth-1 invocation never emits this field.
+- `descendantsTruncated`: `false` when all descendants were fully fetched; `true` when any level-2+ batch hit the 100-result cap without `--all`. Omitted (`omitempty`) when `false`.
+- `--flat --json` mode: emits NDJSON flat — one object per node with fields `key`, `depth` (int, ancestors negative), `parentKey` (omitted for the subject), `issueType`, `status`, `assignee` (omitted when unset), `summary`, `isSubject` (omitted unless true). No `HierarchyChain` wrapper — every node is its own line. `descendantsTruncated` is not emitted in flat mode.

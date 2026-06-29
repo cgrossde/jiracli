@@ -65,6 +65,22 @@ func lookupUsers(ctx context.Context, flags lookupUsersFlags, q string) (string,
 		return "", fmt.Errorf("searching users: %w", err)
 	}
 
+	// Jira DC's query param is a hint and may not filter server-side.
+	// Apply client-side substring filter on name/displayName/email when a
+	// query was provided.
+	if q != "" {
+		ql := strings.ToLower(q)
+		filtered := users[:0]
+		for _, u := range users {
+			if strings.Contains(strings.ToLower(u.Name), ql) ||
+				strings.Contains(strings.ToLower(u.DisplayName), ql) ||
+				strings.Contains(strings.ToLower(u.EmailAddress), ql) {
+				filtered = append(filtered, u)
+			}
+		}
+		users = filtered
+	}
+
 	if flags.JSON {
 		var sb strings.Builder
 		for _, u := range users {

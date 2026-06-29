@@ -7,6 +7,8 @@ allowed-tools:
   - Edit
   - Write
   - Search
+  - Task
+  - Ask
 ---
 
 # Update jiracli Docs
@@ -39,6 +41,7 @@ Use instead:
 - Summaries: generic task descriptions ("Fix login page timeout", "Add dark mode toggle")
 
 This applies when writing new content AND when editing existing content — replace any real identifiers encountered with the fictional equivalents above.
+
 ---
 
 ## Step 1: Identify what changed
@@ -55,12 +58,15 @@ Adjust the depth if the branch is newer. Map changed source files to affected do
 | `cmd/search.go` | `docs/reads.md`, `CLAUDE.md` |
 | `cmd/open.go` | `docs/reads.md`, `CLAUDE.md` |
 | `cmd/me.go` (auth status) | `docs/reads.md`, `docs/setup-auth.md`, `CLAUDE.md` |
+| `cmd/show_hierarchy.go` | `docs/reads.md`, `docs/json-schema.md`, `CLAUDE.md` |
+| `internal/jira/hierarchy.go`, `internal/jira/hierarchy_render.go` | `docs/reads.md`, `docs/json-schema.md`, `ARCHITECTURE.md` |
 | `cmd/create.go`, `cmd/edit.go`, `cmd/field.go`, `cmd/assign.go`, `cmd/transition.go`, `cmd/add.go`, `cmd/comment.go`, `cmd/link.go`, `cmd/attach.go` | `docs/writes.md`, `CLAUDE.md` |
-| `cmd/lookup.go` | `docs/lookup-cache.md`, `CLAUDE.md` |
+| `cmd/lookup.go`, `cmd/lookup_*.go` | `docs/lookup-cache.md`, `CLAUDE.md` |
 | `cmd/cache.go` | `docs/lookup-cache.md`, `CLAUDE.md` |
 | `cmd/auth.go`, `cmd/setup.go` | `docs/setup-auth.md`, `CLAUDE.md` |
 | `internal/keychain/` | `docs/setup-auth.md`, `CLAUDE.md` |
 | `internal/output/presenter.go` | `ARCHITECTURE.md`, `CLAUDE.md` |
+| `internal/jira/issue.go`, `internal/jira/search.go` | `docs/json-schema.md`, `docs/reads.md` |
 | `main.go` | `ARCHITECTURE.md`, `CLAUDE.md` |
 
 Read only the source files relevant to changed docs. Do not read unchanged packages.
@@ -97,12 +103,32 @@ Apply only on explicit approval.
 
 Silently update (no approval needed):
 - `docs/*.md` — command docs are always kept current
-- `CLAUDE.md` — adding a new command row or flag that didn't exist before
-- `ARCHITECTURE.md` — additive factual edits: new file in package tree, new field in JSON schema
+- `CLAUDE.md` — adding a new command row or new flags to an existing row
+- `ARCHITECTURE.md` — additive factual edits: new file in package tree, new field/helper in JSON schema table
 
 ---
 
-## Step 3: Update each stale doc
+## Step 3: Fan out with subagents
+
+Once gaps are identified, use `task` subagents to update multiple docs in parallel — one subagent per target file (or per independent section when two sections of the same file are unrelated). This is the preferred approach for 3+ changes.
+
+Each subagent assignment MUST include:
+- The exact file path and line numbers (read the file first to confirm)
+- The exact content to add/change, with privacy-rule-compliant identifiers
+- Source-of-truth facts (struct field names, flag strings from source code) — never ask the subagent to read source itself unless the source is small and unchanged
+- Acceptance criteria (what the final state should look like)
+
+Do NOT fan out:
+- When a single file has 1–2 small surgical edits (do them yourself)
+- When changes in two files must be consistent with each other (coordinate via the context or sequence them)
+
+### Coordination guidance for subagents
+
+If two subagents could touch the same file, DM each other via `irc` to serialise. The spawner should note which agents share files in the task context.
+
+---
+
+## Step 4: Update each stale doc
 
 ### `CLAUDE.md`
 
@@ -125,14 +151,16 @@ Update only when:
 
 ### `docs/reads.md`
 
-Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show transitions`, `show attachments`, `search`, `open`, `auth status`.
+Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show transitions`, `show attachments`, `show hierarchy`, `search`, `open`, `auth status`.
 
-**Flags section** — one bullet per flag, format:
+**Flags section** — one row per flag in a Markdown table:
 ```
-- `--flag-name value`: Description. Default: `value` (omit if empty/none).
+| Flag | Description |
+|---|---|
+| `--flag-name <val>` | Description. Default noted when non-obvious. |
 ```
 
-**Output format** — show a realistic rendered example. Use real-looking values (e.g. `ACME-123`, `In Progress`), not `<placeholder>`.
+**Output format** — show a realistic rendered example. Use fictional values (`ACME-123`, `In Progress`, `Jane Smith`), not `<placeholder>`.
 
 **JSON schema table** — columns: `Field | Type | Notes`. Notes explain semantics, not Go types. Fields marked `omitempty` in source: "omitted when zero/empty".
 
@@ -161,26 +189,30 @@ Cross-command reference. Update when:
 
 ---
 
-## Step 4: Verify
+## Step 5: Verify
 
 After editing, re-read each changed doc:
 - No section references a flag or field that no longer exists
 - JSON schema table matches actual `json:"..."` struct tags in source
 - Every accepted input form is listed
 - The `## Implementation` section (if present) names the correct files
+- Privacy rule satisfied: no real names, project keys, or URLs
 
 ---
 
-## Step 5: Report
+## Step 6: Report
 
 Print a one-line summary per file touched:
 
 ```
-CLAUDE.md            — updated: added show assigned, auth status rename
-docs/reads.md        — updated: show assigned section, -o flag clarification
-docs/setup-auth.md   — updated: auth me → auth status
-ARCHITECTURE.md      — no changes needed
+CLAUDE.md              — updated: show hierarchy now lists all 8 flags
+docs/reads.md          — updated: hierarchy --open/--flat/--since sections; fixed JSON block; truncation note
+docs/json-schema.md    — updated: hierarchy descendantsTruncated + flat mode; search description/reporter/fixVersions
+ARCHITECTURE.md        — updated: hierarchy.go and hierarchy_render.go package map entries
 CODING-INSTRUCTIONS.md — no changes needed
+docs/writes.md         — no changes needed
+docs/lookup-cache.md   — no changes needed
+docs/setup-auth.md     — no changes needed
 ```
 
 Do not commit. The user decides when to commit.

@@ -399,8 +399,8 @@ Layer 2 presentation.
 | `preview.go` | Preview, ValidationRow, Render, Execute — supports `Method: "DELETE"` (body block suppressed when nil) |
 | `render.go` | FormatRelative, WrapAt, FormatBytes, TruncateString, ColWidth, PadRight, IsASCIILetter, RenderWikiMarkup, AbbreviateChange, StatusCategoryRank |
 | `badges.go` | `ColorsEnabled`, `StripAnsi`, `ColorIssueType`, `ColorStatusName`, `Bold`, `Dim` — ANSI badge helpers used by renderers and `internal/output` |
-| `hierarchy.go` | `HierarchyNode`, `HierarchyChain`, `BuildHierarchy` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink) and children fetch |
-| `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer for the hierarchy chain |
+| `hierarchy.go` | `HierarchyNode`, `HierarchyChain` (incl. `DescendantsTruncated`), `BuildHierarchy` (depth + since params), `fetchChildrenForParents`, `strategyForLevel`, `parentKeyForChild` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink), batched multi-level children fetch, 400 batch-halving retry |
+| `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer with recursive subtree (depth ≥ 2), `renderChildSubtree`; `RenderHierarchyFlat` — tab-separated flat output with DFS order and negative-depth ancestors |
 
 ### HTTP error handling
 

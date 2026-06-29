@@ -26,7 +26,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `show comments <KEY>` | `--profile`, `--json`, `--since`, `--limit`, `--page` | Issue comment thread |
 | `show history <KEY>` | `--profile`, `--json`, `--include-rank`, `--since`, `--limit`, `--page` | Changelog entries |
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
-| `show hierarchy <KEY>` | `--profile`, `--json` | Walk Initiative → Epic → Subject → Children for an issue |
+| `show hierarchy <KEY>` | `--profile`, `--json`, `--all`, `--open`, `--status`, `--depth N`, `--flat`, `--since` | Walk Initiative → Epic → Subject → Children for an issue |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
 | `search <jql...>` | `--profile`, `--json`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user |
 | `open <ref>` | `--profile`, `--print-url` | Open issue/comment/attachment in browser |

@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-
 // RenderHierarchy returns the plain or colored tree representation.
 // colorEnabled controls ANSI; pass ColorsEnabled()-style boolean from the caller.
 // statusFilter optionally limits which children are shown:
@@ -64,23 +63,99 @@ func RenderHierarchy(chain HierarchyChain, colorEnabled bool, statusFilter strin
 	// active we can't know how many server-side results match, so suppress it.
 	truncated := chain.ChildrenTruncated && statusFilter == ""
 
-	for i, ch := range visible {
+	// Render the top-level children with recursive subtree. Track hidden counts.
+	hiddenLevel1 := len(sorted) - len(visible)
+	var hiddenDeeper int
+
+	for i := range visible {
 		connector := "├─"
 		if i == len(visible)-1 && !truncated {
 			connector = "└─"
 		}
-		writeChildRow(&sb, ch, connector, colorEnabled)
+		var nextPrefix string
+		if i == len(visible)-1 && !truncated {
+			nextPrefix = "   " // 3 spaces (last child — no bar)
+		} else {
+			nextPrefix = "│  " // bar + 2 spaces
+		}
+		writeChildRow(&sb, visible[i], connector, "  ", colorEnabled)
+		// Children is non-nil only when descent was attempted (depth >= 2).
+		// nil means "not fetched", so skip the subtree call entirely for leaves.
+		if visible[i].Children != nil {
+			deeper := renderChildSubtree(&sb, visible[i].Children, statusFilter, colorEnabled, "  "+nextPrefix)
+			hiddenDeeper += deeper
+		}
 	}
 
 	if truncated {
 		remaining := chain.ChildrenTotal - len(chain.Children)
 		fmt.Fprintf(&sb, "   … %d more — rerun with --all to fetch everything\n", remaining)
-	} else if statusFilter != "" && len(visible) < len(sorted) {
-		hidden := len(sorted) - len(visible)
-		fmt.Fprintf(&sb, "   (%d hidden by --%s filter)\n", hidden, statusFilter)
+	} else if statusFilter != "" && (hiddenLevel1 > 0 || hiddenDeeper > 0) {
+		total := hiddenLevel1 + hiddenDeeper
+		if hiddenDeeper == 0 {
+			fmt.Fprintf(&sb, "   (%d hidden by --%s filter)\n", hiddenLevel1, statusFilter)
+		} else {
+			fmt.Fprintf(&sb, "   (%d hidden by --%s filter, %d across all levels)\n", hiddenLevel1, statusFilter, total)
+		}
+	}
+	if chain.DescendantsTruncated {
+		sb.WriteString("   (some subtrees may be incomplete — rerun with --all to fetch every descendant)\n")
 	}
 
 	return sb.String()
+}
+
+// renderChildSubtree writes nodes and their descendants to sb, indented by prefix.
+// Returns the count of nodes hidden by statusFilter across all levels rendered here.
+// prefix is the accumulated indent string from parent levels (e.g. "  │  │  ").
+func renderChildSubtree(sb *strings.Builder, nodes []HierarchyNode, statusFilter string, colorEnabled bool, prefix string) int {
+	if len(nodes) == 0 {
+		// When filtering is active and a parent has no visible children,
+		// write the "(no open children)" placeholder.
+		if statusFilter != "" {
+			fmt.Fprintf(sb, "%s└─ (no %s children)\n", prefix, statusFilter)
+		}
+		return 0
+	}
+
+	// Sort: Done last.
+	sorted := make([]HierarchyNode, len(nodes))
+	copy(sorted, nodes)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		iDone := strings.EqualFold(sorted[i].StatusCategory, "Done")
+		jDone := strings.EqualFold(sorted[j].StatusCategory, "Done")
+		return !iDone && jDone
+	})
+
+	visible := filterChildren(sorted, statusFilter)
+	hiddenHere := len(sorted) - len(visible)
+
+	if len(visible) == 0 {
+		// All children hidden by filter.
+		if statusFilter != "" {
+			fmt.Fprintf(sb, "%s└─ (no %s children)\n", prefix, statusFilter)
+		}
+		return hiddenHere
+	}
+
+	totalHidden := hiddenHere
+	for i := range visible {
+		connector := "├─"
+		var nextPrefix string
+		if i == len(visible)-1 {
+			connector = "└─"
+			nextPrefix = prefix + "   "
+		} else {
+			nextPrefix = prefix + "│  "
+		}
+		writeChildRow(sb, visible[i], connector, prefix, colorEnabled)
+		// Only recurse when Children is non-nil (descent was attempted at this level).
+		if visible[i].Children != nil {
+			deeper := renderChildSubtree(sb, visible[i].Children, statusFilter, colorEnabled, nextPrefix)
+			totalHidden += deeper
+		}
+	}
+	return totalHidden
 }
 
 // filterChildren returns children matching the statusFilter.
@@ -143,9 +218,9 @@ func writeSubjectRow(sb *strings.Builder, node HierarchyNode, colorEnabled bool)
 		summary)
 }
 
-// writeChildRow writes a single child row with the given tree connector.
-// Format:   ├─ <KEY:14>  <TYPE-BADGE>  <STATUS:14>  <ASSIGNEE:22>  <SUMMARY:50>
-func writeChildRow(sb *strings.Builder, node HierarchyNode, connector string, colorEnabled bool) {
+// writeChildRow writes a single child row with the given tree connector and prefix.
+// Format: <prefix><connector> <KEY:14>  <TYPE-BADGE>  <STATUS:14>  <ASSIGNEE:22>  <SUMMARY:50>
+func writeChildRow(sb *strings.Builder, node HierarchyNode, connector string, prefix string, colorEnabled bool) {
 	typeBadge := ColorIssueType(node.IssueType, colorEnabled)
 	statusStr := ColorStatusName(node.Status, colorEnabled)
 	statusVis := len([]rune(TruncateString(node.Status, 14)))
@@ -157,11 +232,67 @@ func writeChildRow(sb *strings.Builder, node HierarchyNode, connector string, co
 	}
 	summary := TruncateString(node.Summary, 50)
 
-	fmt.Fprintf(sb, "  %s %-14s  %s  %s  %-22s  %s\n",
+	fmt.Fprintf(sb, "%s%s %-14s  %s  %s  %-22s  %s\n",
+		prefix,
 		connector,
 		TruncateString(node.Key, 14),
 		typeBadge,
 		statusPadded,
 		TruncateString(assignee, 22),
 		summary)
+}
+
+// RenderHierarchyFlat returns a flat, tab-separated table of all nodes in DFS
+// order: depth, key, type, status, assignee, summary.
+// A header row is always emitted first.
+// statusFilter applies the same filter as RenderHierarchy.
+// Ancestors are included at negative depths; subject at depth 0; children at 1+.
+func RenderHierarchyFlat(chain HierarchyChain, statusFilter string) string {
+	var sb strings.Builder
+	sb.WriteString("depth\tkey\ttype\tstatus\tassignee\tsummary\n")
+
+	// Ancestors at depth < 0.
+	d := -len(chain.Ancestors)
+	for _, anc := range chain.Ancestors {
+		fmt.Fprintf(&sb, "%d\t%s\t%s\t%s\t\t%s\n", d, anc.Key, anc.IssueType, anc.Status, anc.Summary)
+		d++
+	}
+
+	// Subject at depth 0.
+	subj := chain.Subject
+	assignee := subj.Assignee
+	if assignee == "" {
+		assignee = "(unassigned)"
+	}
+	fmt.Fprintf(&sb, "%d\t%s\t%s\t%s\t%s\t%s\n", 0, subj.Key, subj.IssueType, subj.Status, assignee, subj.Summary)
+
+	// Children and their descendants, depth-first.
+	var walkFlat func(nodes []HierarchyNode, depth int)
+	walkFlat = func(nodes []HierarchyNode, depth int) {
+		// Sort: Done last (same as tree view).
+		sorted := make([]HierarchyNode, len(nodes))
+		copy(sorted, nodes)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			iDone := strings.EqualFold(sorted[i].StatusCategory, "Done")
+			jDone := strings.EqualFold(sorted[j].StatusCategory, "Done")
+			return !iDone && jDone
+		})
+		visible := filterChildren(sorted, statusFilter)
+		for _, n := range visible {
+			a := n.Assignee
+			if a == "" {
+				a = "(unassigned)"
+			}
+			fmt.Fprintf(&sb, "%d\t%s\t%s\t%s\t%s\t%s\n", depth, n.Key, n.IssueType, n.Status, a, n.Summary)
+			if n.Children != nil {
+				walkFlat(n.Children, depth+1)
+			}
+		}
+	}
+	walkFlat(chain.Children, 1)
+
+	if chain.DescendantsTruncated {
+		sb.WriteString("# (some subtrees may be incomplete — rerun with --all)\n")
+	}
+	return sb.String()
 }

@@ -451,6 +451,12 @@ Requires hierarchy field IDs to be configured for the profile — run `jiracli s
 |---|---|
 | `--json` | NDJSON output (one object: the full chain) |
 | `--profile <name>` | Credential profile |
+| `--depth N` | Levels of descendants to fetch (default 1 = direct children; max 5) |
+| `--status <filter>` | Limit displayed children by status: `open`, `closed`, `not-closed` |
+| `--all` | Fetch all children (bypasses the 100-result default cap) |
+| `--open` | Show only non-Done issues (shorthand for `--status open`) |
+| `--flat` | Flat TSV output: one row per node (`depth`, `key`, `type`, `status`, `assignee`, `summary`). With `--json` emits NDJSON flat mode. |
+| `--since <date>` | Only include issues updated on or after this date (`-2w`, `-1d`, `2024-01-01`). Bare durations (`2w`) have `-` prepended. |
 
 ### Walk behaviour
 
@@ -461,7 +467,70 @@ Requires hierarchy field IDs to be configured for the profile — run `jiracli s
   - Otherwise → subtasks from the subject's inline response (no extra call)
 - Up to 100 children are returned; Done-last sort within the display cap of 15.
 
-### Plain-text output shape
+### `--depth` — recursive subtree
+
+`--depth N` fetches N levels of descendants instead of just direct children. Default is 1 (today's behaviour). Maximum is 5.
+
+```
+jiracli show hierarchy ACME-50 --depth 2
+```
+
+With `--depth 2` on an Initiative, the output shows each Epic and, indented beneath it, the Epic's own children (Stories/Bugs/etc.):
+
+```
+▶ ACME-50         [Initiative]  Open            Modernise authentication platform
+  ├─ ACME-100       [Epic]   In Progress    Jane Smith              Fix login redirect
+  │  ├─ ACME-150     [Story]  To Do          Jane Smith              Reproduce on Safari
+  │  └─ ACME-151     [Story]  Done           John Doe                Write regression test
+  └─ ACME-200       [Epic]   Open           __Unassigned            Upgrade TLS stack
+     └─ ACME-201     [Story]  Open           Alice Brown             Audit cipher suite list
+
+[exit:0 | Xms]
+```
+
+When combined with `--status open`, hidden-count footers accumulate across all levels:
+```
+   (3 hidden by --open filter, 12 across all levels)
+```
+
+Each Epic whose children are all filtered out shows a `(no open children)` placeholder:
+```
+  ├─ ACME-100       [Epic]   In Progress    Jane Smith              Fix login redirect
+  │  └─ (no open children)
+```
+
+### `--flat` — tabular output
+
+`--flat` emits a tab-separated table instead of the tree. Header row is always present. Ancestors appear at negative depth; subject at depth 0; children at depth 1+.
+
+```
+depth	key	type	status	assignee	summary
+0	ACME-50	Initiative	Open	Jane Smith	Modernise authentication platform
+1	ACME-100	Epic	In Progress	John Doe	Fix login redirect
+2	ACME-123	Story	To Do	Jane Smith	Reproduce on Safari
+
+[exit:0 | Xms]
+```
+
+Combine with `--json` for NDJSON flat mode: one object per node.
+
+```json
+{"key":"ACME-50","depth":0,"issueType":"Initiative","status":"Open","assignee":"Jane Smith","summary":"Modernise authentication platform","isSubject":true}
+{"key":"ACME-100","depth":1,"parentKey":"ACME-50","issueType":"Epic","status":"In Progress","assignee":"John Doe","summary":"Fix login redirect"}
+{"key":"ACME-123","depth":2,"parentKey":"ACME-100","issueType":"Story","status":"To Do","assignee":"Jane Smith","summary":"Reproduce on Safari"}
+```
+
+### `--since` — activity filter
+
+`--since <date>` restricts all fetched children (at every depth level) to issues updated on or after the given date. Combines well with `--depth 2` to show recent activity across an Initiative:
+
+```
+jiracli show hierarchy ACME-50 --depth 2 --since -2w --open
+```
+
+Accepted formats: Jira relative dates (`-2w`, `-1d`, `-30m`) and ISO dates (`2024-01-01`). Bare durations (`2w`) are accepted and have `-` prepended automatically.
+
+### Plain-text output shape (depth 1)
 
 ```
 ACME-50         [Initiative]  Open            Modernise authentication platform
@@ -499,6 +568,38 @@ One object:
   "childrenTotal": 2
 }
 ```
+
+With `--depth 2`, each child node may carry a nested `"children"` array of its own (omitted when empty):
+
+```json
+{
+  "ancestors": [],
+  "subject": {"key":"ACME-50","summary":"Modernise authentication platform","status":"Open","statusCategory":"To Do","issueType":"Initiative","isSubject":true},
+  "children": [
+    {
+      "key": "ACME-100",
+      "summary": "Fix login redirect",
+      "status": "In Progress",
+      "statusCategory": "In Progress",
+      "issueType": "Epic",
+      "assignee": "Jane Smith",
+      "children": [
+        {"key":"ACME-150","summary":"Reproduce on Safari","status":"To Do","statusCategory":"To Do","issueType":"Story","assignee":"Jane Smith"},
+        {"key":"ACME-151","summary":"Write regression test","status":"Done","statusCategory":"Done","issueType":"Story","assignee":"John Doe"}
+      ]
+    }
+  ],
+  "childrenTotal": 1
+}
+```
+
+### Truncation
+
+When `--depth >= 2` and any level-2+ batch hit the 100-result cap without `--all`, the output appends:
+```
+   (some subtrees may be incomplete — rerun with --all to fetch every descendant)
+```
+In JSON mode, `"descendantsTruncated": true` is set on the root object.
 
 ### Errors
 
