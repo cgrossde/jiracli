@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/cgrossde/jiracli/internal/cache"
 )
 
 // DefaultIssueFields is the lean field list fetched by default.
@@ -79,8 +82,11 @@ type IssueRaw struct {
 			InwardIssue *struct {
 				Key    string `json:"key"`
 				Fields struct {
-					Summary string `json:"summary"`
-					Status  struct {
+					Summary   string `json:"summary"`
+					IssueType struct {
+						Name string `json:"name"`
+					} `json:"issuetype"`
+					Status struct {
 						Name           string `json:"name"`
 						StatusCategory struct {
 							Name string `json:"name"`
@@ -91,8 +97,11 @@ type IssueRaw struct {
 			OutwardIssue *struct {
 				Key    string `json:"key"`
 				Fields struct {
-					Summary string `json:"summary"`
-					Status  struct {
+					Summary   string `json:"summary"`
+					IssueType struct {
+						Name string `json:"name"`
+					} `json:"issuetype"`
+					Status struct {
 						Name           string `json:"name"`
 						StatusCategory struct {
 							Name string `json:"name"`
@@ -468,6 +477,7 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 				Issue: IssueSummary{
 					Key:            l.OutwardIssue.Key,
 					Summary:        l.OutwardIssue.Fields.Summary,
+					IssueType:      l.OutwardIssue.Fields.IssueType.Name,
 					Status:         l.OutwardIssue.Fields.Status.Name,
 					StatusCategory: l.OutwardIssue.Fields.Status.StatusCategory.Name,
 				},
@@ -481,6 +491,7 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 				Issue: IssueSummary{
 					Key:            l.InwardIssue.Key,
 					Summary:        l.InwardIssue.Fields.Summary,
+					IssueType:      l.InwardIssue.Fields.IssueType.Name,
 					Status:         l.InwardIssue.Fields.Status.Name,
 					StatusCategory: l.InwardIssue.Fields.Status.StatusCategory.Name,
 				},
@@ -643,4 +654,53 @@ func (c *Client) DeleteIssue(ctx context.Context, key string, deleteSubtasks boo
 		return fmt.Errorf("delete issue %s: %w", key, MapStatus("", status, body))
 	}
 	return nil
+}
+
+// TTLIssueSummary is the cache TTL for resolved issue summaries (Epic, Portfolio).
+// Short enough to pick up renames/status changes within an hour.
+const TTLIssueSummary = 1 * time.Hour
+
+// issueSummaryCache is the on-disk shape for a cached summary.
+type issueSummaryCache struct {
+	Summary        string `json:"summary"`
+	Status         string `json:"status"`
+	StatusCategory string `json:"statusCategory"`
+	IssueType      string `json:"issuetype"`
+}
+
+// GetIssueSummary fetches summary, status, and issuetype for a single issue key,
+// returning the result as an IssueSummary. Results are cached per-profile with a
+// 1-hour TTL so Epic Link / Portfolio backfills don't fire a live request every
+// time the same issue is shown.
+//
+// Fail-soft: on any error the returned IssueSummary has only Key populated.
+func (c *Client) GetIssueSummary(ctx context.Context, key string, store *cache.Store) IssueSummary {
+	out := IssueSummary{Key: key}
+	if store != nil {
+		var cached issueSummaryCache
+		if err := store.Get("issue-summary/"+key, TTLIssueSummary, &cached); err == nil {
+			out.Summary = cached.Summary
+			out.Status = cached.Status
+			out.StatusCategory = cached.StatusCategory
+			out.IssueType = cached.IssueType
+			return out
+		}
+	}
+	raw, err := c.GetIssue(ctx, key, "summary,status,issuetype", false)
+	if err != nil {
+		return out
+	}
+	out.Summary = raw.Fields.Summary
+	out.Status = raw.Fields.Status.Name
+	out.StatusCategory = raw.Fields.Status.StatusCategory.Name
+	out.IssueType = raw.Fields.IssueType.Name
+	if store != nil {
+		_ = store.Put("issue-summary/"+key, issueSummaryCache{
+			Summary:        out.Summary,
+			Status:         out.Status,
+			StatusCategory: out.StatusCategory,
+			IssueType:      out.IssueType,
+		})
+	}
+	return out
 }
