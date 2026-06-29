@@ -82,7 +82,7 @@ Narrow:      jiracli <command> --help
 - `head -n 50` a section after finding a line number
 - Re-run the command with narrower flags to reduce output at the source
 
-**Implementation:** `internal/output/presenter.go` — the `overflow()` function. The temp directory uses the tool name (`/tmp/jiracli-output/`) and a monotonically increasing counter for unique file names within a process lifetime. Files are world-readable (`0600`) and persist until system reboot or explicit cleanup.
+**Implementation:** `internal/output/presenter.go` — the `overflow()` function. The temp directory uses the tool name (`/tmp/jiracli-output/`) and a monotonically increasing counter for unique file names within a process lifetime. Files are world-readable (`0600`) and persist until system reboot or explicit cleanup. ANSI escape sequences are stripped from the file content so `grep`, `cat`, and LLM tools work cleanly on it — the displayed (truncated) lines retain their ANSI for terminal rendering.
 
 **Not applied in JSON mode.** When `--json` is set, overflow is bypassed entirely. Scripts handle their own pagination and memory management.
 
@@ -249,6 +249,8 @@ jiracli/
 │   ├── setup.go               Interactive auth + skill wizard
 │   ├── auth.go                auth login / reauth / logout / profile / status
 │   ├── cache.go               cache list / cache clear
+│   ├── config.go              config command group
+│   ├── config_hierarchy.go    config hierarchy: view/update per-profile hierarchy field IDs
 │   │
 │   ├── show.go                show <ref> root; dispatches to sub-commands
 │   ├── issue.go               show <KEY>: fetch + render one issue
@@ -256,6 +258,7 @@ jiracli/
 │   ├── comments.go            show comments <KEY>: paginated comment thread
 │   ├── history.go             show history <KEY>: paginated changelog
 │   ├── transitions.go         show transitions <KEY>: available workflow transitions
+│   ├── show_hierarchy.go      show hierarchy <KEY>: walk Initiative → Epic → Subject → Children
 │   ├── attachments.go         show attachments <KEY>: list attachments
 │   ├── attachment.go          attachment download helper (streaming to stdout or file)
 │   │
@@ -295,7 +298,7 @@ jiracli/
 │   └── skill.go               skill install/uninstall helpers
 ├── internal/
 │   ├── keychain/
-│   │   └── keychain.go        macOS Keychain: save/load/delete/list/default credentials
+│   │   └── keychain.go        macOS Keychain: save/load/delete/list/default credentials; Entry.HierarchyConfig
 │   └── output/
 │       └── presenter.go       Layer 2: overflow, footer, stderr attachment
 └── ARCHITECTURE.md
@@ -377,16 +380,16 @@ Layer 2 presentation.
 
 | File | Responsibility |
 |---|---|
-| `client.go` | HTTP client (Get/Post/Put/Delete/PostMultipart), MapStatus, sentinel errors |
+| `client.go` | HTTP client (Get/Post/Put/Delete/PostMultipart), `MapStatus`, `rateLimitError`, sentinel errors (`ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrRateLimited`, `ErrServer`) |
 | `ref.go` | Reference grammar parser (`ACME-123`, `:comment:`, `:attach:`, `:link:`, browse URLs) — `RefIssue`, `RefComment`, `RefAttachment`, `RefLink` |
-| `issue.go` | GetIssue, DeleteIssue, IssueRaw (incl. `RawFields map[string]json.RawMessage` for custom fields), IssueRecord, IssueLinkRecord, ChildIssueRecord, ToIssueRecord, ResolveActivityStatusCategories |
+| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord, ResolveActivityStatusCategories |
 | `search.go` | Search (POST /search), SearchIssueRecord, ToSearchRecord |
 | `jql.go` | DefaultOpenFilter (statusCategory-based, not status names) |
 | `comments.go` | GetComments, AddComment |
 | `history.go` | GetChangelog (DC 8.7+ dedicated endpoint; falls back to expand=changelog) |
 | `transitions.go` | GetTransitions, DoTransition |
 | `attachments.go` | GetAttachmentMeta, DownloadAttachment, UploadAttachment |
-| `lookup.go` | TTL constants, shared types (Project, Component, Version, Priority, ...), 5 cache-backed list methods |
+| `lookup.go` | TTL constants, shared types (Project, Component, Version, Priority, ...), list methods, `PortfolioCandidates` |
 | `projects.go` | ListProjects, GetProject, ListProjectIssueTypes, GetCreateMeta, ListProjectPriorities |
 | `users.go` | SearchUsers, SearchAssignableUsers, Assign |
 | `fields.go` | ResolveFieldID, UpdateFields |
@@ -395,6 +398,24 @@ Layer 2 presentation.
 | `create.go` | CreateIssue |
 | `preview.go` | Preview, ValidationRow, Render, Execute — supports `Method: "DELETE"` (body block suppressed when nil) |
 | `render.go` | FormatRelative, WrapAt, FormatBytes, TruncateString, ColWidth, PadRight, IsASCIILetter, RenderWikiMarkup, AbbreviateChange, StatusCategoryRank |
+| `badges.go` | `ColorsEnabled`, `StripAnsi`, `ColorIssueType`, `ColorStatusName`, `Bold`, `Dim` — ANSI badge helpers used by renderers and `internal/output` |
+| `hierarchy.go` | `HierarchyNode`, `HierarchyChain`, `BuildHierarchy` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink) and children fetch |
+| `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer for the hierarchy chain |
+
+### HTTP error handling
+
+`do()` (the shared request executor in `client.go`) converts HTTP error responses before returning to callers:
+
+| Status | Sentinel | Message shape |
+|---|---|---|
+| 401 | `ErrUnauthorized` | Names the profile and gives the `auth reauth` command |
+| 403 | `ErrForbidden` | Access denied |
+| 404 | `ErrNotFound` | Surfaces Jira's own `errorMessages` when present |
+| 429 | `ErrRateLimited` | Handled directly in `do()` before the body is passed to `MapStatus`; reads `retry-after`, `X-RateLimit-Remaining`, and `X-RateLimit-Limit` response headers to produce a plain-English message telling the user how long to wait |
+| 5xx | `ErrServer` | Includes the status code |
+| 400 | _(unwrapped)_ | Surfaces Jira's validation/JQL error messages |
+
+Rate limiting (429) is intercepted in `do()` rather than `MapStatus` because the wait time lives in response headers, which `MapStatus` never sees. All other status mappings happen in `MapStatus` after the body is read.
 
 ### Cache layout
 

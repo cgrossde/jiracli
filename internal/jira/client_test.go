@@ -148,6 +148,83 @@ func TestGet_401_returnsErrUnauthorized(t *testing.T) {
 	}
 }
 
+func TestGet_429_withRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("retry-after", "30")
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Limit", "100")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL)
+	_, _, err := c.Get(context.Background(), "/issue/ACME-1", nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "30") {
+		t.Errorf("error should mention retry-after seconds: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Errorf("error should mention rate limited: %v", err)
+	}
+}
+
+func TestGet_429_withBucketInfo(t *testing.T) {
+	// Some Jira DC instances return bucket info without a retry-after.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Limit", "50")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL)
+	_, _, err := c.Get(context.Background(), "/issue/ACME-1", nil)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "0/50 requests remaining") {
+		t.Errorf("error should mention requests remaining: %v", err)
+	}
+}
+
+func TestGet_429_noHeaders(t *testing.T) {
+	// Rate-limited with no headers at all — fallback message.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL)
+	_, _, err := c.Get(context.Background(), "/issue/ACME-1", nil)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "wait a moment") {
+		t.Errorf("error should tell user to wait: %v", err)
+	}
+}
+
+func TestRateLimitError_retryAfterZero(t *testing.T) {
+	// retry-after=0 means no wait needed; should fall through to bucket info.
+	h := http.Header{}
+	h.Set("retry-after", "0")
+	h.Set("X-RateLimit-Remaining", "5")
+	h.Set("X-RateLimit-Limit", "100")
+	err := rateLimitError(h)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got: %v", err)
+	}
+	// retry-after=0 is treated as "no wait specified"; bucket info shown instead.
+	if !strings.Contains(err.Error(), "5/100") {
+		t.Errorf("expected bucket info in error: %v", err)
+	}
+}
+
 func TestPostMultipart_headersAndContentType(t *testing.T) {
 	// Write a temp file to upload.
 	tmpDir := t.TempDir()

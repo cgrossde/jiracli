@@ -24,6 +24,7 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrForbidden    = errors.New("forbidden")
 	ErrNotFound     = errors.New("not found")
+	ErrRateLimited  = errors.New("rate limited")
 	ErrServer       = errors.New("server error")
 )
 
@@ -86,7 +87,9 @@ func (c *Client) apiURL(path string, query url.Values) string {
 }
 
 // do executes an HTTP request, sets auth and accept headers, and returns the
-// response body bytes and status code.
+// response body bytes and status code. A 429 response is converted directly to
+// an ErrRateLimited error so callers never need to inspect the status code for
+// that case.
 func (c *Client) do(req *http.Request) ([]byte, int, error) {
 	req.Header.Set("Authorization", "Bearer "+c.PAT)
 	req.Header.Set("Accept", "application/json")
@@ -101,7 +104,42 @@ func (c *Client) do(req *http.Request) ([]byte, int, error) {
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("reading response body: %w", err)
 	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, resp.StatusCode, rateLimitError(resp.Header)
+	}
+
 	return body, resp.StatusCode, nil
+}
+
+// rateLimitError builds a corrective ErrRateLimited from the response headers
+// sent by Jira Data Center on a 429 response.
+//
+// Jira DC headers (all optional — not every instance has rate limiting on):
+//   retry-after              – seconds until a new token is available (> 0 means wait)
+//   X-RateLimit-Limit        – max tokens in the bucket
+//   X-RateLimit-Remaining    – tokens remaining at request time
+//   X-RateLimit-FillRate     – tokens added per interval
+//   X-RateLimit-Interval-Seconds – interval length in seconds
+func rateLimitError(h http.Header) error {
+	retryAfter := h.Get("retry-after")
+	remaining := h.Get("X-RateLimit-Remaining")
+	limit := h.Get("X-RateLimit-Limit")
+
+	var detail string
+	switch {
+	case retryAfter != "" && retryAfter != "0":
+		detail = fmt.Sprintf("Jira has rate limited this request — wait %s second(s) before retrying", retryAfter)
+		if remaining != "" && limit != "" {
+			detail += fmt.Sprintf(" (%s/%s requests remaining)", remaining, limit)
+		}
+	case remaining != "" && limit != "":
+		detail = fmt.Sprintf("Jira has rate limited this request (%s/%s requests remaining)", remaining, limit)
+	default:
+		detail = "Jira has rate limited this request — wait a moment before retrying"
+	}
+
+	return fmt.Errorf("rate limited: %s: %w", detail, ErrRateLimited)
 }
 
 // Get performs GET <BaseURL>/rest/api/2<path>?<query>.
