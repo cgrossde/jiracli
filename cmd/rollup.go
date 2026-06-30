@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -16,16 +17,19 @@ import (
 type ShowRollupFlags struct {
 	Profile string
 	JSON    bool
-	All     bool // page through all children instead of capping at 100
-	Depth   int  // 1 = subject + L1; 2 = subject + L1 + L2
-	List    bool // also print per-child table
+	All     bool   // page through all children instead of capping at 100
+	Depth   int    // 1 = subject + L1; 2 = subject + L1 + L2
+	List    bool   // also print per-child table
+	JQL     string // --jql: aggregate over arbitrary JQL result set instead of a hierarchy subject
+	Sprint  int    // --sprint <id>: aggregate over issues in a sprint (translated to JQL "sprint = <id>")
+	GroupBy string // --group-by: currently only "assignee"; empty = no grouping (existing behavior)
 }
 
 // NewShowRollupCmd builds the "show rollup" subcommand.
 func NewShowRollupCmd() *cobra.Command {
 	var flags ShowRollupFlags
 	c := &cobra.Command{
-		Use:   "rollup <KEY>",
+		Use:   "rollup [<KEY>]",
 		Short: "Aggregate time + story-point estimates from an issue's children",
 		Long: `Walks the direct children of any issue and aggregates originalEstimate,
 remainingEstimate, timeSpent, and Story Points.
@@ -39,10 +43,41 @@ By default only the immediate children (depth 1) are fetched.  Use --depth 2
 to also aggregate the grandchildren of each L1 child.  If the hierarchy goes
 deeper, a hint is shown.
 
-Use --list to print a per-child breakdown table beneath the summary.`,
-		Args: cobra.ExactArgs(1),
+Use --list to print a per-child breakdown table beneath the summary.
+
+Use --jql or --sprint to aggregate over an arbitrary set of issues instead of
+a hierarchy.  Add --group-by assignee to break down by person.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := ShowRollup(cmd.Context(), flags, args[0])
+			hasKey := len(args) == 1
+			hasJQL := flags.JQL != ""
+			hasSprint := flags.Sprint != 0
+
+			// Mutual exclusion.
+			n := 0
+			if hasKey { n++ }
+			if hasJQL { n++ }
+			if hasSprint { n++ }
+			if n > 1 {
+				return fmt.Errorf("show rollup: <KEY>, --jql, and --sprint are mutually exclusive — choose one")
+			}
+			if n == 0 {
+				return fmt.Errorf("show rollup requires <KEY>, --jql, or --sprint — run: jiracli show rollup --help")
+			}
+
+			// --group-by validation.
+			if flags.GroupBy != "" && flags.GroupBy != "assignee" {
+				return fmt.Errorf("--group-by: only 'assignee' is supported — got %q", flags.GroupBy)
+			}
+			if flags.GroupBy != "" && hasKey {
+				return fmt.Errorf("--group-by requires --jql or --sprint")
+			}
+
+			var ref string
+			if hasKey {
+				ref = args[0]
+			}
+			result, err := ShowRollup(cmd.Context(), flags, ref)
 			if err != nil {
 				return err
 			}
@@ -55,11 +90,19 @@ Use --list to print a per-child breakdown table beneath the summary.`,
 	c.Flags().BoolVar(&flags.All, "all", false, "Page through all children (bypass 100-result cap)")
 	c.Flags().IntVar(&flags.Depth, "depth", 1, "Levels to aggregate: 1 = direct children only, 2 = children + their children")
 	c.Flags().BoolVar(&flags.List, "list", false, "Print a per-child breakdown table beneath the summary")
+	c.Flags().StringVar(&flags.JQL, "jql", "", "Aggregate time tracking over JQL results instead of a hierarchy. Mutex with <KEY> and --sprint.")
+	c.Flags().IntVar(&flags.Sprint, "sprint", 0, "Aggregate over issues in this sprint id. Mutex with <KEY> and --jql.")
+	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Group rollup rows by this dimension. Supported: 'assignee'. Only valid with --jql or --sprint.")
 	return c
 }
 
 // ShowRollup is the Layer 1 implementation for show rollup.
 func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string, error) {
+	// JQL / sprint path — no hierarchy subject needed.
+	if flags.JQL != "" || flags.Sprint != 0 {
+		return showRollupJQL(ctx, flags)
+	}
+
 	parsed, err := jira.ParseRef(ref)
 	if err != nil || parsed.Kind != jira.RefIssue {
 		return "", fmt.Errorf("show rollup requires a plain issue key — got %q", ref)
@@ -256,6 +299,104 @@ func fetchNodes(ctx context.Context, client *jira.Client, jql string, fields []s
 		truncated = true
 	}
 	return nodes, total, truncated, nil
+}
+
+// showRollupJQL aggregates time-tracking over an arbitrary JQL result set or sprint,
+// optionally grouped by assignee.
+func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
+	entry, err := resolveEntry(flags.Profile)
+	if err != nil {
+		return "", err
+	}
+	client := jira.New(entry)
+
+	jql := flags.JQL
+	if flags.Sprint != 0 {
+		jql = fmt.Sprintf("sprint = %d", flags.Sprint)
+	}
+	spField := entry.Hierarchy.StoryPointsField
+
+	fields := []string{"summary", "status", "issuetype", "assignee", "timetracking"}
+	if spField != "" {
+		fields = append(fields, spField)
+	}
+
+	nodes, total, truncated, err := fetchNodes(ctx, client, jql, fields, flags.All, spField)
+	if err != nil {
+		return "", fmt.Errorf("fetching issues for rollup: %w", err)
+	}
+	if len(nodes) == 0 {
+		return fmt.Sprintf("no issues matched: %s\n", jql), nil
+	}
+
+	// Build the subject label used in headers.
+	subjectKey := "(jql)"
+	if flags.Sprint != 0 {
+		subjectKey = fmt.Sprintf("(sprint %d)", flags.Sprint)
+	}
+
+	var rows []jira.RollupRow
+
+	if flags.GroupBy == "assignee" {
+		// Group nodes by assignee display name.
+		order := []string{} // preserve first-seen order before sorting
+		groups := map[string][]jira.RollupNode{}
+		for _, n := range nodes {
+			name := n.Assignee
+			if name == "" {
+				name = "Unassigned"
+			}
+			if _, seen := groups[name]; !seen {
+				order = append(order, name)
+			}
+			groups[name] = append(groups[name], n)
+		}
+		for _, name := range order {
+			row := jira.AggregateNodes(groups[name], name, false)
+			rows = append(rows, row)
+		}
+		// Sort by OriginalEstimateSecs desc, then TimeSpentSecs desc, then name asc.
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].OriginalEstimateSecs != rows[j].OriginalEstimateSecs {
+				return rows[i].OriginalEstimateSecs > rows[j].OriginalEstimateSecs
+			}
+			if rows[i].TimeSpentSecs != rows[j].TimeSpentSecs {
+				return rows[i].TimeSpentSecs > rows[j].TimeSpentSecs
+			}
+			return rows[i].Label < rows[j].Label
+		})
+		// Append total row.
+		totalRow := jira.AggregateNodes(nodes, "Total", truncated)
+		totalRow.TotalCount = total
+		rows = append(rows, totalRow)
+	} else {
+		totalRow := jira.AggregateNodes(nodes, fmt.Sprintf("Total — %d issues", total), truncated)
+		totalRow.TotalCount = total
+		rows = append(rows, totalRow)
+	}
+
+	tree := jira.RollupTree{
+		SubjectKey:      subjectKey,
+		SubjectIssueType: "", // empty signals JQL/sprint mode to renderer
+		SubjectSummary:  jql,
+		SubjectRow:      jira.RollupRow{}, // no own TT for a virtual subject
+		Rows:            rows,
+		HasDeeperLevel:  false,
+		MaxFetchedDepth: 1,
+	}
+	if flags.List {
+		tree.Nodes = nodes
+	}
+
+	if flags.JSON {
+		data, err := json.Marshal(tree)
+		if err != nil {
+			return "", fmt.Errorf("marshal rollup: %w", err)
+		}
+		return string(data) + "\n", nil
+	}
+
+	return renderRollupJQL(tree), nil
 }
 
 // typeCountLabel builds a human-readable count label from IssueTypeCounts.
@@ -506,4 +647,96 @@ func dashIfZeroFloat(f float64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%g", f)
+}
+
+// renderRollupJQL produces plain-text output for the JQL/sprint rollup mode.
+// It replaces the subject-header block with a one-line title and renders rows
+// as a flat table (one row per assignee group, or a single Total row).
+func renderRollupJQL(tree jira.RollupTree) string {
+	var sb strings.Builder
+	clr := colorsEnabled()
+
+	// How many issues are represented by the last row (the Total row).
+	totalIssues := 0
+	if len(tree.Rows) > 0 {
+		totalIssues = tree.Rows[len(tree.Rows)-1].TotalCount
+	}
+
+	header := fmt.Sprintf("Rollup: %s  (%d issues)", tree.SubjectSummary, totalIssues)
+	if clr {
+		fmt.Fprintf(&sb, "%s\n\n", jira.BoldFgW(header, true))
+	} else {
+		fmt.Fprintf(&sb, "%s\n\n", header)
+	}
+
+	const (
+		colW   = 10
+		labelW = 36
+	)
+	rule := strings.Repeat("─", labelW+2+(colW+2)*3+(colW+2)) + "\n"
+
+	fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s\n",
+		labelW, "Assignee / Group",
+		colW, "Planned",
+		colW, "Remaining",
+		colW, "Spent",
+		colW, "SP")
+	sb.WriteString(rule)
+
+	printRow := func(label string, r jira.RollupRow) {
+		sp := dashIfZeroFloat(r.StoryPoints)
+		fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s\n",
+			labelW, jira.TruncateString(label, labelW),
+			colW, dashIfZero(r.OriginalEstimateSecs),
+			colW, dashIfZero(r.RemainingEstimateSecs),
+			colW, dashIfZero(r.TimeSpentSecs),
+			colW, sp)
+	}
+
+	// All rows except the last (Total) are regular group rows.
+	// If there's only one row it's the Total-only path (no group-by).
+	if len(tree.Rows) == 1 {
+		printRow(tree.Rows[0].Label, tree.Rows[0])
+	} else {
+		for i, row := range tree.Rows {
+			if i == len(tree.Rows)-1 {
+				sb.WriteString(rule)
+			}
+			printRow(row.Label, row)
+		}
+	}
+	sb.WriteByte('\n')
+
+	// --list per-issue table.
+	if len(tree.Nodes) > 0 {
+		sb.WriteString(sectionLabel("Issues:") + "\n")
+		const keyW = 14
+		const sumW = 52
+		listRule := strings.Repeat("─", keyW+2+sumW+2+(colW+2)*4) + "\n"
+		fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
+			keyW, "Key",
+			sumW, "Summary",
+			colW, "Planned",
+			colW, "Remaining",
+			colW, "Spent",
+			colW, "SP")
+		sb.WriteString("  " + listRule)
+		for _, n := range tree.Nodes {
+			sp := "—"
+			if n.StoryPoints != nil {
+				sp = fmt.Sprintf("%g", *n.StoryPoints)
+			}
+			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
+				keyW, jira.TruncateString(n.Key, keyW),
+				sumW, jira.TruncateString(n.Summary, sumW),
+				colW, dashIfZero(n.OriginalEstimateSecs),
+				colW, dashIfZero(n.RemainingEstimateSecs),
+				colW, dashIfZero(n.TimeSpentSecs),
+				colW, sp)
+		}
+		sb.WriteByte('\n')
+	}
+
+	fmt.Fprintf(&sb, "→ jiracli show <KEY>  # to drill into any issue\n")
+	return sb.String()
 }

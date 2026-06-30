@@ -21,6 +21,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `auth profile` | `[profile]`, `--clear`, `--list` | Get or set default profile |
 | `auth status` | `--profile`, `--json`, `--no-cache` | Show current authenticated user and credential status |
 | `config hierarchy` | `--profile`, `--json`, `--portfolio`, `--rediscover` | View or update hierarchy field IDs for the profile |
+| `config agile` | `--profile`, `--json`, `--rediscover`, `--field` | View or update Sprint custom-field ID for the profile |
 | `show <ref> [ref...]` | `--profile`, `--json`, `--no-history`, `--no-comments`, `--comments N`, `--fields`, `--fields-only`, `--no-children`, `--parent`, `-o` | Fetch and render one or more issues; pass `-` to read keys from stdin. Compound refs (`KEY:attach:ID`) single only. |
 | `show assigned` | `--profile`, `--json`, `--keys-only`, `--category`, `--limit`, `--page` | Issues assigned to the current user |
 | `show comments <KEY>` | `--profile`, `--json`, `--since`, `--limit`, `--page` | Issue comment thread |
@@ -28,8 +29,8 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
 | `show hierarchy <KEY>` | `--profile`, `--json`, `--all`, `--open`, `--status`, `--depth N`, `--flat`, `--since` | Walk Initiative → Epic → Subject → Children for an issue |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
-|`show rollup <KEY>`|`--profile`, `--json`, `--all`, `--depth N`, `--list`|Aggregate time + story-point estimates across any issue's hierarchy. Works on any issue type (Initiative, Epic, Story, etc.). Side-by-side table: subject own vs Level 1 children; `--depth 2` adds Level 2 grandchildren. `--list` prints per-child breakdown. Requires hierarchy fields configured.|
-| `search [<jql...>]` | `--profile`, `--json`, `--keys-only`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category`, `--jql` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user; `--jql <query>` passes the entire JQL as one string (bypasses arg joining, safe for quoted literals like `text ~ "KSP"`); `--keys-only` prints one key per line for piping |
+|`show rollup [<KEY>]`|`--profile`, `--json`, `--all`, `--depth N`, `--list`, `--jql`, `--sprint`, `--group-by`|Aggregate time + story-point estimates. Hierarchy mode (`<KEY>`): walks children. JQL/sprint mode (`--jql` or `--sprint`): aggregates over a result set; `--group-by assignee` breaks down by person. `--list` prints per-issue table.|
+| `search [<jql...>]` | `--profile`, `--json`, `--keys-only`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category`, `--jql`, `--time` | Search issues; `--time` adds Estimate/Remaining/Spent columns (shorthand for three `--fields` entries); all other flags unchanged |
 | `open <ref>` | `--profile`, `--print-url` | Open issue/comment/attachment in browser |
 | `lookup users` | `--profile`, `--project`, `--active`, `--limit`, `--json` | Search users |
 | `lookup labels` | `--profile`, `--project`, `--json` | Suggest labels |
@@ -41,11 +42,20 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `lookup statuses` | `--profile`, `--query`, `--json` | List statuses |
 | `lookup priorities` | `--profile`, `--project`, `--json` | List priorities |
 | `lookup fields` | `--profile`, `--custom`, `--id`, `--project`, `--type`, `--json` | List/inspect fields |
+| `lookup boards` | `--profile`, `--project` (required), `--type` (scrum\|kanban), `--limit`, `--page`, `--json`, `--no-cache` | List Agile boards for a project |
 | `cache list` | `--profile`, `--json` | Show cached entries with TTLs |
 | `cache clear` | `--profile`, `--key`, `--yes` | Purge cache entries (use `cache list` to see key names) |
 | `edit status <KEY> [KEY...] <name-or-id>` | `--profile`, `--comment`, `--yes` | Transition one or more issues; last arg is always the transition name/id |
 | `edit assignee <KEY> [KEY...] <user-or-id>` | `--profile`, `--yes` | Assign one or more issues; last arg is always the user (`-` to unassign, `me` for self) |
 | `edit field <KEY> [KEY...] <spec...>` | `--profile`, `--allow-new`, `--yes` | Update arbitrary fields on one or more issues; leading args without `=` are keys, first arg with `=` starts specs |
+| `edit sprint <KEY> [KEY...] <target>` | `--profile`, `--board`, `--yes` | Move issues into a sprint or backlog (dry-run by default; target: numeric id, `current`, `next`, `backlog`) |
+| `board list` | `--profile`, `--project` (required), `--type` (scrum\|kanban), `--limit`, `--page`, `--json`, `--no-cache` | List Agile boards for a project (alias of `lookup boards`) |
+| `board show <id>` | `--profile`, `--project`, `--json`, `--no-cache` | Show board configuration (columns, type) |
+| `board issues <id>` | `--profile`, `--limit`, `--page`, `--json`, `--keys-only` | List issues on a board via Agile API |
+| `sprint list` | `--profile`, `--board` (required), `--state`, `--limit`, `--page`, `--json`, `--name-contains`, `--after`, `--before`, `--sort` | List sprints. Filter flags are client-side; `--state closed` defaults to newest-first (`--sort desc`). |
+| `sprint show <id>` | `--profile`, `--json` | Show sprint details |
+| `sprint issues <id>` | `--profile`, `--limit`, `--page`, `--json`, `--keys-only` | List issues in a sprint |
+| `sprint current` | `--profile`, `--board` (required), `--assigned`, `--exclude-done`, `--json` | Show active sprint and embedded issue list for a board |
 | `add comment <KEY> <body...>` | `--profile`, `--file`, `--yes` | Add comment (dry-run by default) |
 | `add link <source> <target>` | `--profile`, `--type`, `--yes` | Link two issues |
 | `add attachment <KEY> <file...>` | `--profile`, `--yes` | Upload attachments |

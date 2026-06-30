@@ -17,13 +17,13 @@ Interactive first-time wizard. Idempotent — each step short-circuits when stat
 | `--profile <name>` | `default` | Target credential profile |
 | `--url <url>` | — | Pre-fill Step 1 (skips URL prompt) |
 | `--pat-file <path>` | — | Read PAT from file (CI/scripted use) |
-| `--no-skill` | false | Skip Step 4 (skill install) |
+| `--no-skill` | false | Skip Step 5 (skill install) |
 | `--reconfigure` | false | Force all prompts even when state is valid |
 | `--no-browser` | false | Print PAT-creation URL but never call `open` |
 
 ### Flow
 
-Four steps, each independently idempotent:
+Five steps, each independently idempotent:
 
 **Step 1 — Jira server URL**
 - Prompts for base URL; `--url` pre-fills.
@@ -46,7 +46,13 @@ Four steps, each independently idempotent:
 - Short-circuit: if `EpicLinkField` is already set in the stored entry and `--reconfigure` is not given, prints `✓ Hierarchy already configured (Epic=... Parent=... Portfolio=...)` and skips.
 - Fields not found (e.g. Jira Software not installed) print an advisory and continue — the step is non-fatal.
 
-**Step 4 — Skill install**
+**Step 4 — Agile / Sprint field discovery**
+- Calls `GET /rest/api/2/field` and finds the field where `Name == "Sprint"` and schema custom type is `com.pyxis.greenhopper.jira:gh-sprint`. Falls back to `Name == "Sprint"` with array type.
+- Stores the result in `AgileConfig.SprintField` inside the Keychain entry.
+- Short-circuit: if `SprintField` is already set and `--reconfigure` is not given, prints `✓ Sprint field already configured (customfield_XXXXX)` and skips.
+- Not found (Jira Software not installed): prints advisory and continues — non-fatal.
+
+**Step 5 — Skill install**
 - Byte-compares the embedded `SKILL.md` against `~/.claude/skills/jira/SKILL.md`.
 - Missing → prompts `Install? [Y/n]` (default Y).
 - Outdated → prompts `Skill exists but is outdated. Update? [Y/n]`.
@@ -75,11 +81,17 @@ Service `jiracli`, account = profile name. Stored as JSON:
     "portfolioField": "customfield_10102",
     "portfolioFieldName": "Initiative Link",
     "discoveredAt": "2026-06-29T10:00:00Z"
+  },
+  "agile": {
+    "sprintField": "customfield_10050",
+    "discoveredAt": "2026-06-29T10:00:00Z"
   }
 }
 ```
 
 `hierarchy` is `omitempty` — omitted on legacy profiles that haven't run setup step 3.
+
+`agile` is `omitempty` — omitted on profiles that haven't discovered the sprint field.
 
 `kind` is always `"dc-pat"` in v1. `insecure` is omitted when false.
 
@@ -299,3 +311,55 @@ jiracli config hierarchy --portfolio none
 
 - No credentials: `[stderr] no credentials found — run: jiracli setup`, exit 1.
 - Unknown field: `[stderr] unknown field "customfield_99999" — run: jiracli lookup fields`, exit 1.
+
+---
+
+## `config agile`
+
+View or update the Sprint custom-field ID for a credential profile. Used by `show <KEY>` to render the Sprint section and by `search --fields sprint`.
+
+    jiracli config agile [flags]
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--profile <name>`|default profile|Credential profile|
+|`--json`|false|NDJSON output|
+|`--rediscover`|false|Re-run sprint field discovery against the live `/field` list|
+|`--field <id\|name\|none>`|—|Set the sprint field explicitly; `none` clears it|
+
+### Output (plain text, no flags)
+
+    Agile config for profile "default":
+      Sprint field : customfield_10050
+      Discovered at: 2026-06-29T10:00:00Z
+
+A live probe line follows showing whether the resolved field matches the stored value.
+
+### Output (`--json`)
+
+```json
+{"sprintField":"customfield_10050","discoveredAt":"2026-06-29T10:00:00Z"}
+```
+
+### Usage patterns
+
+```bash
+# View current sprint field config
+jiracli config agile
+
+# Re-discover after installing Jira Software
+jiracli config agile --rediscover
+
+# Set explicitly by field id
+jiracli config agile --field customfield_10050
+
+# Clear
+jiracli config agile --field none
+```
+
+### Errors
+
+- No credentials: `[stderr] no credentials found — run: jiracli setup`, exit 1.
+- Unknown field: `[stderr] unknown field "X" — run: jiracli lookup fields`, exit 1.

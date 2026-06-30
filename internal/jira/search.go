@@ -64,6 +64,7 @@ type SearchIssueRecord struct {
 	Summary        string              `json:"summary"`
 	Description    string              `json:"description,omitempty"`
 	Status         string              `json:"status"`
+	StatusID       string              `json:"statusId,omitempty"`
 	StatusCategory string              `json:"statusCategory"`
 	Assignee       *IssueUserRef       `json:"assignee"`
 	Reporter       *IssueUserRef       `json:"reporter,omitempty"`
@@ -75,6 +76,7 @@ type SearchIssueRecord struct {
 	FixVersions    []string            `json:"fixVersions,omitempty"`
 	TimeTracking   *TimeTrackingRecord `json:"timetracking,omitempty"`
 	StoryPoints    *float64            `json:"storyPoints,omitempty"`
+	Sprints        []SprintRef         `json:"sprints,omitempty"`
 }
 
 // SearchPaginationTrailer is emitted as the final NDJSON line when more pages exist.
@@ -90,12 +92,14 @@ type SearchPaginationTrailer struct {
 
 // ToSearchRecord maps an IssueRaw to a SearchIssueRecord.
 // spField is the instance-specific Story Points custom field ID (empty = disabled).
-func ToSearchRecord(raw IssueRaw, spField string) SearchIssueRecord {
+// sprintField is the instance-specific Sprint custom field ID (empty = disabled).
+func ToSearchRecord(raw IssueRaw, spField, sprintField string) SearchIssueRecord {
 	rec := SearchIssueRecord{
 		Key:            raw.Key,
 		Summary:        raw.Fields.Summary,
 		Description:    raw.Fields.Description,
 		Status:         raw.Fields.Status.Name,
+		StatusID:       raw.Fields.Status.ID,
 		StatusCategory: raw.Fields.Status.StatusCategory.Name,
 		IssueType:      raw.Fields.IssueType.Name,
 		Updated:        raw.Fields.Updated,
@@ -157,6 +161,13 @@ func ToSearchRecord(raw IssueRaw, spField string) SearchIssueRecord {
 			if err := json.Unmarshal(spRaw, &n); err == nil {
 				rec.StoryPoints = &n
 			}
+		}
+	}
+
+	// Sprints — dynamic custom field
+	if sprintField != "" {
+		if sprintRaw, ok := raw.RawFields[sprintField]; ok && len(sprintRaw) > 0 && string(sprintRaw) != "null" {
+			rec.Sprints = parseSprintRaw(sprintRaw)
 		}
 	}
 

@@ -251,6 +251,7 @@ jiracli/
 │   ├── cache.go               cache list / cache clear
 │   ├── config.go              config command group
 │   ├── config_hierarchy.go    config hierarchy: view/update per-profile hierarchy field IDs
+│   ├── config_agile.go        config agile: view/update sprint custom-field ID
 │   │
 │   ├── show.go                show <ref> root; dispatches to sub-commands
 │   ├── issue.go               show <KEY>: fetch + render one issue
@@ -281,6 +282,7 @@ jiracli/
 │   ├── transition.go          edit status <KEY> <name-or-id>
 │   ├── assign.go              edit assignee <KEY> <user-or-id>
 │   ├── field.go               edit field <KEY> <spec…>
+│   ├── edit_sprint.go         edit sprint <KEY...> <target>: move issues into sprint or backlog
 │   │
 │   ├── create.go              create issue
 │   ├── rollup.go              show rollup <KEY>: aggregate time + SP across hierarchy levels (--depth, --list, --all)
@@ -296,10 +298,13 @@ jiracli/
 │   ├── lookup_statuses.go     lookup statuses
 │   ├── lookup_priorities.go   lookup priorities
 │   ├── lookup_fields.go       lookup fields
+│   ├── lookup_boards.go       lookup boards: list Agile boards for a project
+│   ├── board.go               board list/show/issues: Agile board inspection
+│   ├── sprint.go              sprint list/show/issues/current: Agile sprint inspection
 │   └── skill.go               skill install/uninstall helpers
 ├── internal/
 │   ├── keychain/
-│   │   └── keychain.go        macOS Keychain: save/load/delete/list/default credentials; Entry.HierarchyConfig
+│   │   └── keychain.go        macOS Keychain: save/load/delete/list/default credentials; Entry.HierarchyConfig, Entry.AgileConfig
 │   └── output/
 │       └── presenter.go       Layer 2: overflow, footer, stderr attachment
 └── ARCHITECTURE.md
@@ -382,15 +387,16 @@ Layer 2 presentation.
 | File | Responsibility |
 |---|---|
 | `client.go` | HTTP client (Get/Post/Put/Delete/PostMultipart), `MapStatus`, `rateLimitError`, sentinel errors (`ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrRateLimited`, `ErrServer`) |
+| `agile.go` | Agile REST client (`AgileGet`/`AgilePost`/`AgilePut`, `agileURL`), domain types (`Board`, `BoardConfig`, `BoardColumn`, `BoardFilter`, `Sprint`, `AgileConfig`), read methods (`ListBoards`, `ListBoardsCached`, `GetBoardConfig`, `GetBoardConfigCached`, `GetBoardFilter`, `ListSprints`, `ListSprintsCached`, `ListSprintNames`, `HydrateSprintDates`, `ListAllSprintsPaged`, `GetSprint`, `ListSprintIssues`, `ListBoardIssues`), mutation methods (`MoveIssuesToSprint`, `MoveIssuesToBacklog`), `ResolveSprintField`, `ErrBoardNoSprints`, `sprintQueryEnvelope` |
 | `ref.go` | Reference grammar parser (`ACME-123`, `:comment:`, `:attach:`, `:link:`, browse URLs) — `RefIssue`, `RefComment`, `RefAttachment`, `RefLink` |
-| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord, ResolveActivityStatusCategories |
-| `search.go` | Search (POST /search), SearchIssueRecord, ToSearchRecord |
+| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord, ResolveActivityStatusCategories, SprintRef, parseSprintRaw |
+| `search.go` | Search (POST /search), SearchIssueRecord (incl. Sprints []SprintRef), ToSearchRecord |
 | `jql.go` | DefaultOpenFilter (statusCategory-based, not status names) |
 | `comments.go` | GetComments, AddComment |
 | `history.go` | GetChangelog (DC 8.7+ dedicated endpoint; falls back to expand=changelog) |
 | `transitions.go` | GetTransitions, DoTransition |
 | `attachments.go` | GetAttachmentMeta, DownloadAttachment, UploadAttachment |
-| `lookup.go` | TTL constants, shared types (Project, Component, Version, Priority, ...), list methods, `PortfolioCandidates` |
+| `lookup.go` | TTL constants, shared types (Project, Component, Version, Priority, ...), list methods, `PortfolioCandidates`, TTLBoards, TTLBoardConfig, TTLSprintsActive, TTLSprintsClosed |
 | `projects.go` | ListProjects, GetProject, ListProjectIssueTypes, GetCreateMeta, ListProjectPriorities |
 | `users.go` | SearchUsers, SearchAssignableUsers, Assign |
 | `fields.go` | ResolveFieldID, UpdateFields |
@@ -426,7 +432,7 @@ Rate limiting (429) is intercepted in `do()` rather than `MapStatus` because the
   myself.json             # TTL 24h
   fields.json             # TTL 24h
   projects.json           # TTL 24h
-  statuses.json           # TTL 24h
+  statuses.json           # TTL 7 days
   issuetypes.json         # TTL 24h
   linktypes.json          # TTL 24h
   priorities.json         # TTL 24h
@@ -437,6 +443,14 @@ Rate limiting (429) is intercepted in `do()` rather than `MapStatus` because the
   createmeta/<KEY>/
     <typeID>.json         # TTL 24h
   labels/<KEY>.json       # TTL 5m (JQL aggregation)
+  boards/<KEY>.json       # TTL 1h  (page 1, limit ≥ 50 only)
+  board/<id>/
+    config.json           # TTL 1h
+  sprints/<boardID>/
+    active+future.json    # TTL 1h  (agile/1.0 page 1, default states)
+    closed.json           # TTL 7d  (agile/1.0 page 1, --state closed)
+    names.json            # TTL 1h  (GreenHopper fast path: all sprint names+states in one call)
+    closed-all.json       # TTL 7d  (full paged fetch of all closed sprints, for filter flags)
 ```
 
 The hash namespaces caches per (profile, URL) so switching instances never

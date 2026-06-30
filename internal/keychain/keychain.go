@@ -41,6 +41,7 @@ type Entry struct {
 	SavedAt     time.Time       `json:"savedAt"`
 	Insecure    bool            `json:"insecure,omitempty"`
 	Hierarchy   HierarchyConfig `json:"hierarchy,omitempty"`
+	Agile       AgileConfig     `json:"agile,omitempty"`
 }
 
 // HierarchyConfig stores per-instance custom-field IDs for hierarchy walks.
@@ -53,6 +54,13 @@ type HierarchyConfig struct {
 	PortfolioFieldName string    `json:"portfolioFieldName,omitempty"`
 	StoryPointsField   string    `json:"storyPointsField,omitempty"`
 	DiscoveredAt       time.Time `json:"discoveredAt,omitempty"`
+}
+
+// AgileConfig stores per-instance Agile/Sprint configuration.
+// Populated by `jiracli setup` or `jiracli config agile --rediscover`.
+type AgileConfig struct {
+	SprintField  string    `json:"sprintField,omitempty"`
+	DiscoveredAt time.Time `json:"discoveredAt,omitempty"`
 }
 
 // ErrNotFound is returned when no credential exists for the requested profile.

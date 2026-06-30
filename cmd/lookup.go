@@ -23,6 +23,7 @@ func NewLookupCmd() *cobra.Command {
 		newLookupComponentsCmd(),
 		newLookupVersionsCmd(),
 		newLookupProjectsCmd(),
+		newLookupBoardsCmd(),
 		newLookupIssueTypesCmd(),
 		newLookupLinkTypesCmd(),
 		newLookupStatusesCmd(),

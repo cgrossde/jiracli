@@ -40,11 +40,12 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "setup",
 		Short: "Interactive first-time setup wizard (auth + skill install)",
-		Long: `Guided setup in four steps:
+		Long: `Guided setup in five steps:
   1. Verify the Jira server URL
   2. Save a Personal Access Token (PAT)
   3. Discover hierarchy custom-field IDs
-  4. Install the Claude/OpenCode skill`,
+  4. Discover Agile / Sprint field
+  5. Install the Claude/OpenCode skill`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := rawOut
@@ -190,12 +191,12 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 
 		step3hierarchy:
 			// ── Step 3: Hierarchy field discovery ──────────────────────────────
-			setupDivider(out, "Step 3 of 4 — Hierarchy Fields")
+			setupDivider(out, "Step 3 of 5 — Hierarchy Fields")
 
 			if !flags.Reconfigure && entry.Hierarchy.EpicLinkField != "" {
 				fmt.Fprintf(out, "✓ Hierarchy already configured (Epic=%s Parent=%s Portfolio=%s)\n",
 					entry.Hierarchy.EpicLinkField, entry.Hierarchy.ParentLinkField, entry.Hierarchy.PortfolioField)
-				goto step4skill
+				goto step5skill
 			}
 
 			{
@@ -256,9 +257,31 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 				}
 			}
 
-		step4skill:
-			// ── Step 4: Skill install ───────────────────────────────────────────
-			setupDivider(out, "Step 4 of 4 — Claude / OpenCode Skill")
+			// ── Step 4: Sprint custom field discovery ───────────────────────────
+			setupDivider(out, "Step 4 of 5 — Agile / Sprint Field")
+			if !flags.Reconfigure && entry.Agile.SprintField != "" {
+				fmt.Fprintf(out, "✓ Sprint field already configured (%s)\n", entry.Agile.SprintField)
+				goto step5skill
+			}
+			{
+				aClient := jira.New(entry)
+				aStore := cache.NewStore(entry)
+				if fid, err := aClient.ResolveSprintField(ctx, aStore, false); err == nil && fid != "" {
+					entry.Agile.SprintField = fid
+					entry.Agile.DiscoveredAt = time.Now().UTC()
+					fmt.Fprintf(out, "✓ Sprint field = %s\n", fid)
+					if err := keychain.Save(entry); err != nil {
+						return fmt.Errorf("saving agile config: %w", err)
+					}
+				} else {
+					fmt.Fprintln(out, "  (Sprint field not found — Jira Software not installed?)")
+					fmt.Fprintln(out, "  Sprint commands will still work via Agile API.")
+				}
+			}
+
+		step5skill:
+			// ── Step 5: Skill install ───────────────────────────────────────────
+			setupDivider(out, "Step 5 of 5 — Claude / OpenCode Skill")
 
 			if flags.NoSkill || len(skillContent) == 0 {
 				fmt.Fprintln(out, "Skill step skipped.")
@@ -273,6 +296,8 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 			fmt.Fprintln(out, "Try:")
 			fmt.Fprintln(out, "  jiracli auth me")
 			fmt.Fprintln(out, "  jiracli show assigned")
+			fmt.Fprintln(out, "  jiracli board list --project <KEY>")
+			fmt.Fprintln(out, "  jiracli sprint current --board <ID>")
 			return ErrAlreadyPresented
 		},
 	}

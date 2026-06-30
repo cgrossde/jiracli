@@ -135,6 +135,18 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	editCmd.GroupID = "main"
 	root.AddCommand(editCmd)
 
+	// board group — agile board inspection.
+	boardCmd := jiracmd.NewBoardCmd()
+	wrapGroup(boardCmd)
+	boardCmd.GroupID = "main"
+	root.AddCommand(boardCmd)
+
+	// sprint group — agile sprint inspection and mutation.
+	sprintCmd := jiracmd.NewSprintCmd()
+	wrapGroup(sprintCmd)
+	sprintCmd.GroupID = "main"
+	root.AddCommand(sprintCmd)
+
 	// add group — attach sub-objects to an issue.
 	addCmd := jiracmd.NewAddCmd()
 	wrapGroup(addCmd)

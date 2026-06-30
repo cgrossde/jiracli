@@ -13,6 +13,7 @@ Full reference for all commands, flags, output formats, and schemas.
 | [setup-auth.md](setup-auth.md) | First-time setup, PAT auth, profiles, skill install |
 | [reads.md](reads.md) | `show`, `search`, `assigned`, `comments`, `history`, `transitions`, `attachments`, `open` |
 | [writes.md](writes.md) | `add comment`, `edit status/assignee/field`, `create`, `add link`, `add attachment` — and the write safety model |
+| [boards-sprints.md](boards-sprints.md) | `board`, `sprint`, `lookup boards`, `edit sprint`, `config agile` — Agile board and sprint commands |
 | [delete.md](delete.md) | `delete comment`, `delete attachment`, `delete link`, `delete issue` |
 | [lookup.md](lookup.md) | `lookup users/labels/components/versions/projects/issue-types/link-types/statuses/priorities/fields` |
 | [cache.md](cache.md) | `cache list`, `cache clear`, auto-invalidation |
@@ -50,6 +51,19 @@ jiracli lookup components  --project PROJ
 jiracli lookup priorities  --project PROJ
 jiracli lookup link-types
 jiracli lookup users "alex" --project PROJ
+```
+
+### Agile (boards and sprints)
+
+```sh
+jiracli lookup boards --project PROJ
+jiracli board show 101
+jiracli sprint current --board 101
+jiracli sprint list --board 101 --state active,future
+jiracli sprint issues 2001
+jiracli edit sprint ACME-123 current --board 101
+jiracli edit sprint ACME-123 backlog --yes
+jiracli config agile
 ```
 
 ---

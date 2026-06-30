@@ -77,6 +77,7 @@ Field names match Jira's own field IDs. Standard names usable with `--fields`:
 | `timespent` | `Spent` | Add with `timespent` |
 | `timetracking` | `Estimates:` block | **Fetched by default.** Shows `Planned / Remaining / Spent` + progress bar when non-zero. |
 | Story Points field ID | `Story Points:` | Fetched and displayed when discovered at setup (run `jiracli config hierarchy --json` to see `storyPointsField`). |
+| `sprint` | `Sprint:` block | Add with `sprint`. Shows all sprints on the issue. Requires sprint field to be configured (`jiracli config agile`). |
 | `customfield_XXXXX` | raw ID | Any custom field ID from `jiracli lookup fields` |
 
 ### Plain-text output shape
@@ -94,6 +95,9 @@ Story Points: 5
 
 Epic: ACME-100  "Epic summary"
 Portfolio: ACME-50  "Modernise authentication platform"  (Open)
+
+Sprint: Sprint 42  active  2026-06-15 → 2026-06-29
+  → jiracli sprint show 2001
 
 Fix Versions: 2026.06
 Labels: label1, label2
@@ -164,6 +168,11 @@ Comment section behavior:
 - `total > 50`: hint becomes `→ 50+ comments — use jiracli show comments ACME-123 --page 1`.
 - `--comments N > 25`: rejected with `[stderr] --comments max is 25 — use jiracli show comments <KEY> --limit <N> for a longer thread`.
 
+Sprint section:
+- Omitted when the issue has no sprint data or the sprint field is not configured (`jiracli config agile`).
+- When present, shows one line per sprint: `Sprint: <name>  <state>  <start> → <end>`.
+- Each sprint line is followed by `  → jiracli sprint show <id>`.
+
 ### NDJSON output (`--json`)
 
 Single object (v1 schema, additive-only):
@@ -188,6 +197,10 @@ Single object (v1 schema, additive-only):
   "parent": null,
   "epic": {"key": "ACME-100", "summary": "Auth reliability"},
   "portfolio":      { "key": "ACME-50", "summary": "Modernise authentication platform", "status": "Open", "statusCategory": "To Do" },
+  "storyPoints": 5,
+  "sprints": [
+    {"id": 2001, "name": "Sprint 42", "state": "active", "startDate": "2026-06-15", "endDate": "2026-06-29"}
+  ],
   "links": [{"type":"Blocks","direction":"outward","relationship":"blocks","issue":{"key":"ACME-145","summary":"...","status":"In Progress","statusCategory":"In Progress"}}],
   "attachments": [{"id":"11001","filename":"trace.har","mimeType":"application/json","size":145000,"uploaded":"...","author":"u1"}],
   "comments": {
@@ -206,6 +219,8 @@ Single object (v1 schema, additive-only):
 `comments.items` contains the latest `--comments N` entries. `comments.truncated` is `true` when `total > items.length`. Full thread via `jiracli show comments <KEY> --json`.
 
 `portfolio`: `null` when absent (field is omitted in JSON); `IssueSummary` object (`key`, `summary`, `status`, `statusCategory`) when the issue belongs to a portfolio. Requires hierarchy configuration — see `jiracli config hierarchy`.
+
+`sprints`: array of `SprintRef` objects; omitted (`omitempty`) when the issue has no sprint data or the sprint field is not configured. Each entry has `id` (int), `name`, `state` (`"active"`, `"future"`, `"closed"`), `startDate`, `endDate` (strings, ISO 8601; omitted when absent).
 
 ### Errors
 
@@ -239,7 +254,7 @@ query contains quoted string literals (e.g. `text ~ "KSP"`), shell quoting can
 mangle the join. Use `--jql` to pass the entire query as one shell argument,
 bypassing the join:
 
-    jiracli search --jql 'text ~ "KSP" AND project = CAR ORDER BY updated DESC'
+    jiracli search --jql 'text ~ "login" AND project = ACME ORDER BY updated DESC'
 
 ### Flags
 
@@ -256,6 +271,7 @@ bypassing the join:
 | `--json` | false | NDJSON output |
 | `--profile <name>` | default | Credential profile |
 | `--keys-only` | false | Print one issue key per line — no headers, no footer, no overflow. Bypasses Layer 2 presenter. |
+| `--time` | false | Show time-tracking columns: `Estimate`, `Remaining`, `Spent`. Shorthand for `--fields +timeoriginalestimate,+timeestimate,+timespent`. Ignored when `--fields-only` is used. |
 
 ### Default behaviour
 
@@ -281,6 +297,7 @@ Default fields fetched: `key, status, issuetype, priority, assignee, updated, su
 | `timeestimate` | `Remaining` | Formatted as `2h30m` |
 | `timeoriginalestimate` | `Estimate` | Formatted as `2h30m` |
 | `timespent` | `Spent` | Formatted as `2h30m` |
+| `sprint` | `Sprint` | Alias — resolved to the configured sprint custom field id. Requires `jiracli config agile`. Omitted silently when not configured. |
 | `customfield_XXXXX` | raw ID | Any field ID from `jiracli lookup fields` |
 
 `--fields-only "key,summary,description"` restricts to exactly those fields (mutex with `--fields`). `type` renders from `issueType`; the NDJSON field is `issueType`.
@@ -376,6 +393,233 @@ Convenience wrapper over `search`. Defaults to `assignee = currentUser() AND sta
 | `--keys-only` | Print one issue key per line (no headers, no footer); ideal for piping |
 
 Output is identical to `search`. The header line shows the effective JQL so the caller can see exactly what was run. The default-open filter is not applied separately — the JQL is pre-built and complete.
+
+---
+
+## `board list`
+
+List Agile boards for a project.
+
+    jiracli board list --project <KEY> [flags]
+    jiracli lookup boards --project <KEY> [flags]   # identical alias
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--project <KEY>`|—|Project key (**required**)|
+|`--type <type>`|—|Filter by board type: `scrum` or `kanban`|
+|`--limit N`|50|Results per page (max 100)|
+|`--page N`|1|1-indexed page|
+|`--json`|false|NDJSON output|
+|`--no-cache`|false|Bypass 1h cache|
+|`--profile <name>`|default|Credential profile|
+
+Calls `GET /rest/agile/1.0/board?projectKeyOrId=<KEY>`. Cached per project key, TTL 1h (page 1 only with limit ≥ 50).
+
+### Plain-text output
+
+```
+  101       Car Release Scrum                         scrum
+  102       Car Kanban Board                          kanban
+
+→ jiracli sprint current --board 101
+→ jiracli board issues 102
+→ jiracli sprint list --board 101
+```
+
+### NDJSON output (`--json`)
+
+```ndjson
+{"id":101,"name":"Car Release Scrum","type":"scrum"}
+{"id":102,"name":"Car Kanban Board","type":"kanban"}
+```
+
+Pagination trailer when more pages exist:
+```json
+{"_pagination":{"page":1,"pages":-1,"total":-1,"next_page":2,"has_more":true}}
+```
+`pages` and `total` are `-1` because the Agile board endpoint does not report total page count. Use `has_more` as the canonical signal.
+
+---
+
+## `board show <id>`
+
+Show board configuration: type, columns, and column status IDs.
+
+    jiracli board show <id> [flags]
+
+`<id>` must be numeric. For name-based resolution, pass `--project <KEY>`.
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--project <KEY>`|—|Required when `<id>` is a board name (not a number)|
+|`--json`|false|NDJSON output|
+|`--no-cache`|false|Bypass 1h cache|
+|`--profile <name>`|default|Credential profile|
+
+### Plain-text output
+
+```
+Board 101  Car Release Scrum  scrum
+
+Columns:
+  To Do                 statuses: [1, 10269]
+  In Progress           statuses: [10020, 3]
+  Done                  statuses: [6]
+
+Drill in:
+  → jiracli board issues 101
+  → jiracli sprint list --board 101
+```
+
+Kanban boards omit the `→ jiracli sprint list` line.
+
+### NDJSON output (`--json`)
+
+Single `BoardConfig` object:
+
+```json
+{"id":101,"name":"Car Release Scrum","type":"scrum","columns":[{"name":"To Do","statusIds":["1","10269"]},{"name":"In Progress","statusIds":["10020","3"]},{"name":"Done","statusIds":["6"]}]}
+```
+
+---
+
+## `board issues <id>`
+
+List all issues on a board via the Agile API.
+
+    jiracli board issues <id> [flags]
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--limit N`|50|Results per page (max 100)|
+|`--page N`|1|1-indexed page|
+|`--json`|false|NDJSON output|
+|`--keys-only`|false|Print one key per line|
+|`--profile <name>`|default|Credential profile|
+
+Calls `GET /rest/agile/1.0/board/<id>/issue`. Output shape is identical to `search` plain text and NDJSON; header line reads `board: <id>  <name>` instead of a JQL string.
+
+---
+
+## `sprint list`
+
+List sprints for a scrum board.
+
+    jiracli sprint list --board <id> [flags]
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--board <id>`|—|Scrum board ID (**required**)|
+|`--state <csv>`|`active,future`|Comma-separated subset: `active`, `future`, `closed`, `all`|
+|`--limit N`|50|Results per page|
+|`--page N`|1|1-indexed page|
+|`--json`|false|NDJSON output|
+|`--profile <name>`|default|Credential profile|
+
+Calls `GET /rest/agile/1.0/board/<id>/sprint`. On a kanban board: exits 1 with corrective message:
+
+    [stderr] board 102 is kanban and does not support sprints — use: jiracli board issues 102
+
+### Plain-text output
+
+```
+  2001      active    Sprint 42                                  2026-06-15 → 2026-06-29
+    → jiracli sprint issues 2001
+  2002      future    Sprint 43                                  2026-06-30 → 2026-07-14
+    → jiracli sprint issues 2002
+```
+
+---
+
+## `sprint show <id>`
+
+Show full details for a sprint.
+
+    jiracli sprint show <id> [flags]
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--json`|false|NDJSON output|
+|`--profile <name>`|default|Credential profile|
+
+### Plain-text output
+
+```
+Sprint 2001  Sprint 42  active
+Dates:  2026-06-15 → 2026-06-29  (activated 2026-06-15)
+Board:  101
+Goal:   Ship login redesign
+
+Drill in:
+  → jiracli sprint issues 2001
+```
+
+`Goal: (none)` when empty.
+
+### NDJSON output (`--json`)
+
+```json
+{"id":2001,"name":"Sprint 42","state":"active","startDate":"2026-06-15T00:00:00.000Z","endDate":"2026-06-29T23:59:59.000Z","activatedDate":"2026-06-15T00:00:00.000Z","originBoardId":101,"goal":"Ship login redesign"}
+```
+
+---
+
+## `sprint issues <id>`
+
+List issues in a sprint via the Agile API.
+
+    jiracli sprint issues <id> [flags]
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--limit N`|50|Results per page (max 100)|
+|`--page N`|1|1-indexed page|
+|`--json`|false|NDJSON output|
+|`--keys-only`|false|Print one key per line|
+|`--profile <name>`|default|Credential profile|
+
+Calls `GET /rest/agile/1.0/sprint/<id>/issue`. Output shape identical to `search`; header reads `sprint: <id>  <name>`.
+
+---
+
+## `sprint current`
+
+Show the active sprint and its issues for a scrum board.
+
+    jiracli sprint current --board <id> [flags]
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--board <id>`|—|Scrum board ID (**required**)|
+|`--assigned`|false|Show only issues assigned to current user (client-side)|
+|`--exclude-done`|false|Exclude issues in Done status category (client-side)|
+|`--json`|false|NDJSON output|
+|`--profile <name>`|default|Credential profile|
+
+### Behaviour
+
+- **0 active sprints** → exits 1: `[stderr] no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future`
+- **1 active sprint** → renders sprint detail (`sprint show` format) followed by up to 25 issues (`sprint issues` format). When total > 25, appends `→ jiracli sprint issues 2001 --limit 100`.
+- **>1 active sprints** → exits 1, lists each sprint with drill-down hints.
+- **Kanban board** → exits 1: `[stderr] board 102 is kanban and does not support sprints — use: jiracli board issues 102`
+
+### JSON mode
+
+Emits the sprint object first, then one issue NDJSON record per line, then the pagination trailer if applicable.
 
 ---
 
@@ -681,21 +925,35 @@ In JSON mode, `"descendantsTruncated": true` is set on the root object.
 
 ---
 
-## `rollup <KEY>`
+## `rollup`
 
-Aggregates time estimates and Story Points across a hierarchy. Works on any issue type — Initiatives, Epics, Stories, Tasks, etc. Shows the subject's own time tracking alongside aggregated children, in a side-by-side table.
+Aggregates time estimates and Story Points across a hierarchy **or** an arbitrary JQL result set.
+
+Two modes:
+
+**Hierarchy mode** (existing):
 
     jiracli show rollup <KEY> [flags]
 
-Requires hierarchy fields to be configured (`jiracli setup --reconfigure` or `jiracli config hierarchy --rediscover`). Story Points are included automatically when `storyPointsField` is set in the profile. If hierarchy fields are missing, an error is printed: `hierarchy fields not configured for profile "X" — run: jiracli config hierarchy --rediscover`.
+Walks the direct children of the issue at `<KEY>`. Requires hierarchy fields to be configured (`jiracli setup --reconfigure` or `jiracli config hierarchy --rediscover`).
+
+**JQL / sprint mode** (new):
+
+    jiracli show rollup --sprint <id> [--group-by assignee] [flags]
+    jiracli show rollup --jql '<JQL>' [--group-by assignee] [flags]
+
+Aggregates over the result set of an arbitrary JQL query or a single sprint. Does not require hierarchy configuration. `<KEY>`, `--jql`, and `--sprint` are mutually exclusive.
 
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--depth N` | 1 | Depth to aggregate. 1 = direct children only; 2 = children + grandchildren. Capped at 2. |
-| `--list` | false | Print a per-child breakdown table beneath the summary |
-| `--all` | false | Page through all children (bypasses 100-result default cap) |
+| `--depth N` | 1 | Depth to aggregate (hierarchy mode only). 1 = direct children only; 2 = children + grandchildren. Capped at 2. |
+| `--list` | false | Print a per-issue breakdown table beneath the summary |
+| `--all` | false | Page through all issues (bypasses 100-result default cap) |
+| `--jql <query>` | — | Aggregate over this JQL result set. Mutex with `<KEY>` and `--sprint`. |
+| `--sprint <id>` | — | Aggregate over issues in this sprint id. Mutex with `<KEY>` and `--jql`. |
+| `--group-by assignee` | — | Break down rows by assignee. Only valid with `--jql` or `--sprint`. |
 | `--json` | false | Output as a single JSON object |
 | `--profile <name>` | default | Credential profile |
 
@@ -794,6 +1052,42 @@ Single JSON object:
 ```
 
 `nodes` is `null` unless `--list` is passed; when populated each node includes `hasChildren: true/false`. `rows` has one entry at `--depth 1`, two at `--depth 2`. `issueTypeCounts` maps issue type name → count within that level; omitted when empty. `hasDeeperLevel` is `true` when any L1 child has its own children.
+
+### JQL / sprint mode output
+
+When `--sprint` or `--jql` is used, the subject-header block is replaced with a one-line title. The table header labels the column as "Assignee / Group".
+
+Without `--group-by`:
+
+```
+Rollup: sprint = 2001  (31 issues)
+
+Assignee / Group                         Planned   Remaining       Spent          SP
+──────────────────────────────────────────────────────────────────────────────────────
+Total — 31 issues                          640h        240h        380h         120
+
+→ jiracli show <KEY>  # to drill into any issue
+```
+
+With `--group-by assignee`:
+
+```
+Rollup: sprint = 2001  (31 issues)
+
+Assignee / Group                         Planned   Remaining       Spent          SP
+──────────────────────────────────────────────────────────────────────────────────────
+Smith, Jane                                 96h         48h         52h          21
+Doe, John                                   80h         32h         44h          13
+Unassigned                                  16h         16h          —            —
+──────────────────────────────────────────────────────────────────────────────────────
+Total                                      640h        240h        380h         120
+
+→ jiracli show <KEY>  # to drill into any issue
+```
+
+Rows are sorted by `Planned` desc, then `Spent` desc, then name asc. The final `Total` row sums all groups. `Unassigned` groups issues with no assignee.
+
+**JSON note:** in JQL/sprint mode, `subjectIssueType` is `""` and `subject` rows are zeroed; the `rows` array carries the group/total rows. This is distinct from hierarchy mode where `subjectIssueType` is always non-empty.
 
 ### Errors
 

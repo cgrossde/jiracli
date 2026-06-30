@@ -351,6 +351,119 @@ func (c *Client) ListSprintsCached(ctx context.Context, boardID int, states []st
 	return sprints, isLast, nil
 }
 
+// sprintQueryEnvelope is the response of GET /rest/greenhopper/1.0/sprintquery/{boardID}.
+// This legacy endpoint returns ALL sprints for a board in a single HTTP call.
+// Dates are NOT included — caller must hydrate them via GetSprint when needed.
+type sprintQueryEnvelope struct {
+	Sprints []struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		State    string `json:"state"` // "CLOSED" | "ACTIVE" | "FUTURE"
+		Sequence int    `json:"sequence"`
+	} `json:"sprints"`
+	RapidViewID int `json:"rapidViewId"`
+}
+
+// ListSprintNames fetches every sprint id+name+state for a board in one HTTP call
+// via the legacy GreenHopper sprintquery endpoint. Dates are NOT included —
+// caller must hydrate them via HydrateSprintDates when needed.
+//
+// Cached for 1h under "sprints/<board>/names". If the endpoint returns non-200
+// (older DC version, plugin disabled), an error is returned and the caller should
+// fall back to ListAllSprintsPaged.
+func (c *Client) ListSprintNames(ctx context.Context, boardID int, store *cache.Store, noCache bool) ([]Sprint, error) {
+	cacheKey := fmt.Sprintf("sprints/%d/names", boardID)
+	if !noCache && store != nil {
+		var cached []Sprint
+		if err := store.Get(cacheKey, TTLSprintsActive, &cached); err == nil {
+			return cached, nil
+		}
+	}
+	u := c.BaseURL + fmt.Sprintf("/rest/greenhopper/1.0/sprintquery/%d?includeHistoricSprints=true&includeFutureSprints=true", boardID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	body, status, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("sprintquery board %d: %w", boardID, MapStatus("", status, body))
+	}
+	var env sprintQueryEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("parse sprintquery: %w", err)
+	}
+	out := make([]Sprint, 0, len(env.Sprints))
+	for _, s := range env.Sprints {
+		out = append(out, Sprint{
+			ID:            s.ID,
+			Name:          s.Name,
+			State:         strings.ToLower(s.State), // normalize to lowercase to match agile/1.0
+			OriginBoardID: env.RapidViewID,
+			// StartDate / EndDate intentionally empty — call HydrateSprintDates if needed
+		})
+	}
+	if !noCache && store != nil {
+		_ = store.Put(cacheKey, out)
+	}
+	return out, nil
+}
+
+// HydrateSprintDates fills StartDate/EndDate on sprints that lack them by
+// calling GetSprint per id. Existing dates are preserved (no overwrite).
+// Failed individual lookups leave that sprint's dates empty and are silently skipped.
+func (c *Client) HydrateSprintDates(ctx context.Context, sprints []Sprint) []Sprint {
+	for i := range sprints {
+		if sprints[i].StartDate != "" || sprints[i].EndDate != "" {
+			continue
+		}
+		full, err := c.GetSprint(ctx, sprints[i].ID)
+		if err != nil {
+			continue
+		}
+		sprints[i].StartDate = full.StartDate
+		sprints[i].EndDate = full.EndDate
+	}
+	return sprints
+}
+
+// ListAllSprintsPaged fetches every sprint matching the state filter by paging
+// through ListSprints until isLast=true. Page size 100 (API max).
+// Used when dates are needed up front (--after / --before).
+//
+// When states == ["closed"] the result is cached for 7 days under
+// "sprints/<board>/closed-all". Other state combinations are not cached.
+func (c *Client) ListAllSprintsPaged(ctx context.Context, boardID int, states []string, store *cache.Store, noCache bool) ([]Sprint, error) {
+	isClosedOnly := len(states) == 1 && states[0] == "closed"
+	var cacheKey string
+	if isClosedOnly {
+		cacheKey = fmt.Sprintf("sprints/%d/closed-all", boardID)
+	}
+	if cacheKey != "" && !noCache && store != nil {
+		var cached []Sprint
+		if err := store.Get(cacheKey, TTLSprintsClosed, &cached); err == nil {
+			return cached, nil
+		}
+	}
+	var all []Sprint
+	for page := 1; ; page++ {
+		batch, isLast, err := c.ListSprints(ctx, boardID, states, page, 100)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if isLast || len(batch) == 0 {
+			break
+		}
+	}
+	if cacheKey != "" && !noCache && store != nil {
+		_ = store.Put(cacheKey, all)
+	}
+	return all, nil
+}
+
 // GetSprint fetches a single sprint by ID.
 // GET /sprint/{id}
 func (c *Client) GetSprint(ctx context.Context, sprintID int) (Sprint, error) {

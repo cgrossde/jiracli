@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,12 +34,16 @@ and "issues" / "show" to inspect them. For Kanban work, see: jiracli board`,
 // ---------------------------------------------------------------------------
 
 type sprintListFlags struct {
-	Profile string
-	JSON    bool
-	Board   int
-	State   string // csv: active,future,closed,all — default "active,future"
-	Limit   int
-	Page    int
+	Profile      string
+	JSON         bool
+	Board        int
+	State        string // csv: active,future,closed,all — default "active,future"
+	Limit        int
+	Page         int
+	NameContains string // --name-contains: case-insensitive substring filter on sprint Name
+	After        string // --after YYYY-MM-DD: keep sprints whose endDate >= this date
+	Before       string // --before YYYY-MM-DD: keep sprints whose startDate <= this date
+	Sort         string // --sort: "asc" or "desc"; defaults to "desc" when --state is exactly "closed"
 }
 
 type sprintShowFlags struct {
@@ -96,6 +102,10 @@ Examples:
 	c.Flags().StringVar(&flags.State, "state", "active,future", "Comma-separated states: active, future, closed, all")
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Max results per page")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
+	c.Flags().StringVar(&flags.NameContains, "name-contains", "", "Case-insensitive substring filter on sprint name (client-side; fetches all sprints for the board)")
+	c.Flags().StringVar(&flags.After, "after", "", "Keep sprints whose endDate is on/after this YYYY-MM-DD date")
+	c.Flags().StringVar(&flags.Before, "before", "", "Keep sprints whose startDate is on/before this YYYY-MM-DD date")
+	c.Flags().StringVar(&flags.Sort, "sort", "", "Sort by start date: 'asc' or 'desc'. Defaults to 'desc' when --state is exactly 'closed', else 'asc'.")
 	return c
 }
 
@@ -193,45 +203,157 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 		page = 1
 	}
 
-	sprints, isLast, err := client.ListSprintsCached(ctx, flags.Board, states, page, limit, store, false)
-	if err != nil {
-		if errors.Is(err, jira.ErrBoardNoSprints) {
-			return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
+	// Validate date flags early — no I/O needed.
+	var afterDate, beforeDate time.Time
+	if flags.After != "" {
+		afterDate, err = time.Parse("2006-01-02", flags.After)
+		if err != nil {
+			return "", fmt.Errorf("--after must be YYYY-MM-DD — got %q", flags.After)
 		}
-		return "", err
+	}
+	if flags.Before != "" {
+		beforeDate, err = time.Parse("2006-01-02", flags.Before)
+		if err != nil {
+			return "", fmt.Errorf("--before must be YYYY-MM-DD — got %q", flags.Before)
+		}
 	}
 
-	if flags.JSON {
-		var sb strings.Builder
-		for _, s := range sprints {
-			data, _ := json.Marshal(s)
-			sb.Write(data)
-			sb.WriteByte('\n')
+	// Determine effective sort direction.
+	// Default: "desc" when --state is exactly "closed", else "asc".
+	sortDir := flags.Sort
+	if sortDir == "" {
+		if strings.EqualFold(strings.TrimSpace(flags.State), "closed") {
+			sortDir = "desc"
+		} else {
+			sortDir = "asc"
 		}
-		if !isLast {
-			fmt.Fprintf(&sb, "{\"_pagination\":{\"page\":%d,\"pages\":-1,\"total\":-1,\"next_page\":%d,\"has_more\":true}}\n",
-				page, page+1)
-		}
-		return sb.String(), nil
 	}
 
-	var sb strings.Builder
-	if len(sprints) == 0 {
-		sb.WriteString("no sprints found\n")
-		return sb.String(), nil
+	// Fast path: no client-side filters set, preserve existing cached behaviour.
+	isFilteredPath := flags.NameContains != "" || flags.After != "" || flags.Before != "" || flags.Sort != ""
+	if !isFilteredPath {
+		sprints, isLast, fetchErr := client.ListSprintsCached(ctx, flags.Board, states, page, limit, store, false)
+		if fetchErr != nil {
+			if errors.Is(fetchErr, jira.ErrBoardNoSprints) {
+				return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
+			}
+			return "", fetchErr
+		}
+		return renderSprintList(flags, sprints, isLast, page, limit, false), nil
 	}
-	fmt.Fprintf(&sb, "Board %d — use: jiracli sprint issues <id>\n\n", flags.Board)
-	for _, s := range sprints {
-		dates := sprintDateRange(s)
-		fmt.Fprintf(&sb, "  %-8d  %-8s  %-40s  %s\n", s.ID, s.State, s.Name, dates)
-	}
-	if !isLast {
-		fmt.Fprintf(&sb, "\n--- next: jiracli sprint list --board %d --page %d --limit %d ---\n",
-			flags.Board, page+1, limit)
+
+	// Filtered paths all need the full sprint set.
+	var allSprints []jira.Sprint
+	needDates := flags.After != "" || flags.Before != ""
+
+	if !needDates {
+		// Name-only or sort-only path: use the fast GreenHopper endpoint (1 HTTP call).
+		sprints, ghErr := client.ListSprintNames(ctx, flags.Board, store, false)
+		if ghErr != nil {
+			slog.Warn("sprintquery unavailable, falling back to paged listing", "board", flags.Board, "err", ghErr)
+			// Fallback to paged agile/1.0 endpoint.
+			sprints, ghErr = client.ListAllSprintsPaged(ctx, flags.Board, nil, store, false)
+			if ghErr != nil {
+				if errors.Is(ghErr, jira.ErrBoardNoSprints) {
+					return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
+				}
+				return "", ghErr
+			}
+		}
+		allSprints = sprints
 	} else {
-		fmt.Fprintf(&sb, "\n→ jiracli sprint issues <id>\n")
+		// Date path: must use paged agile/1.0 to get StartDate/EndDate.
+		sprints, fetchErr := client.ListAllSprintsPaged(ctx, flags.Board, states, store, false)
+		if fetchErr != nil {
+			if errors.Is(fetchErr, jira.ErrBoardNoSprints) {
+				return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
+			}
+			return "", fetchErr
+		}
+		allSprints = sprints
 	}
-	return sb.String(), nil
+
+	// Apply state filter (GreenHopper path returns all states; paged path with states==nil also returns all).
+	filtered := make([]jira.Sprint, 0, len(allSprints))
+	for _, s := range allSprints {
+		if len(states) > 0 {
+			matched := false
+			for _, st := range states {
+				if strings.EqualFold(s.State, st) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		// Apply --name-contains filter.
+		if flags.NameContains != "" && !strings.Contains(strings.ToLower(s.Name), strings.ToLower(flags.NameContains)) {
+			continue
+		}
+		// Apply --after filter (endDate >= afterDate).
+		if !afterDate.IsZero() {
+			if s.EndDate == "" {
+				// empty endDate treated as match (ongoing/upcoming sprint)
+			} else {
+				end := parseDateOnly(s.EndDate)
+				if !end.IsZero() && end.Before(afterDate) {
+					continue
+				}
+			}
+		}
+		// Apply --before filter (startDate <= beforeDate).
+		if !beforeDate.IsZero() {
+			if s.StartDate == "" {
+				// empty startDate: cannot prove it falls before cutoff, skip
+				continue
+			}
+			start := parseDateOnly(s.StartDate)
+			if !start.IsZero() && start.After(beforeDate) {
+				continue
+			}
+		}
+		filtered = append(filtered, s)
+	}
+
+	// Sort by StartDate; fall back to ID when StartDate is absent.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		si := parseDateOnly(filtered[i].StartDate)
+		sj := parseDateOnly(filtered[j].StartDate)
+		if si.IsZero() && sj.IsZero() {
+			// both missing dates: sort by ID
+			if sortDir == "desc" {
+				return filtered[i].ID > filtered[j].ID
+			}
+			return filtered[i].ID < filtered[j].ID
+		}
+		if si.IsZero() {
+			return sortDir != "desc" // no date → sort after dated entries in asc, before in desc
+		}
+		if sj.IsZero() {
+			return sortDir == "desc"
+		}
+		if sortDir == "desc" {
+			return si.After(sj)
+		}
+		return si.Before(sj)
+	})
+
+	// Paginate the filtered result.
+	total := len(filtered)
+	start := (page - 1) * limit
+	if start >= total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page1Sprints := filtered[start:end]
+	isLast := end >= total
+
+	return renderSprintList(flags, page1Sprints, isLast, page, limit, true /*filteredMode*/), nil
 }
 
 func sprintShow(ctx context.Context, flags sprintShowFlags, idStr string) (string, error) {
@@ -547,4 +669,81 @@ func formatSprintDate(s string) string {
 		}
 	}
 	return s // raw fallback if parse fails
+}
+
+// renderSprintList renders a list of sprints as plain text or NDJSON.
+// filteredMode=true enables real pagination metadata in the JSON trailer.
+func renderSprintList(flags sprintListFlags, sprints []jira.Sprint, isLast bool, page, limit int, filteredMode bool) string {
+	if flags.JSON {
+		var sb strings.Builder
+		for _, s := range sprints {
+			data, _ := json.Marshal(s)
+			sb.Write(data)
+			sb.WriteByte('\n')
+		}
+		if !isLast {
+			fmt.Fprintf(&sb, "{\"_pagination\":{\"page\":%d,\"pages\":-1,\"total\":-1,\"next_page\":%d,\"has_more\":true}}\n",
+				page, page+1)
+		}
+		return sb.String()
+	}
+	var sb strings.Builder
+	if len(sprints) == 0 {
+		sb.WriteString("no sprints found\n")
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "Board %d — use: jiracli sprint issues <id>\n\n", flags.Board)
+	for _, s := range sprints {
+		dates := sprintDateRange(s)
+		fmt.Fprintf(&sb, "  %-8d  %-8s  %-40s  %s\n", s.ID, s.State, s.Name, dates)
+	}
+	if !isLast {
+		next := buildSprintListNextCmd(flags, page+1, limit)
+		fmt.Fprintf(&sb, "\n--- %s ---\n", next)
+	} else {
+		fmt.Fprintf(&sb, "\n→ jiracli sprint issues <id>\n")
+	}
+	return sb.String()
+}
+
+// buildSprintListNextCmd reconstructs the jiracli sprint list command for the next page,
+// including any non-default flags.
+func buildSprintListNextCmd(flags sprintListFlags, nextPage, limit int) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("jiracli sprint list --board %d --page %d --limit %d", flags.Board, nextPage, limit))
+	if flags.State != "" && flags.State != "active,future" {
+		parts = append(parts, fmt.Sprintf("--state %s", flags.State))
+	}
+	if flags.NameContains != "" {
+		parts = append(parts, fmt.Sprintf("--name-contains %q", flags.NameContains))
+	}
+	if flags.After != "" {
+		parts = append(parts, fmt.Sprintf("--after %s", flags.After))
+	}
+	if flags.Before != "" {
+		parts = append(parts, fmt.Sprintf("--before %s", flags.Before))
+	}
+	if flags.Sort != "" {
+		parts = append(parts, fmt.Sprintf("--sort %s", flags.Sort))
+	}
+	return "next: " + strings.Join(parts, " ")
+}
+
+// parseDateOnly parses a Jira date/datetime string to a time.Time at midnight UTC.
+// Returns zero time if parsing fails or s is empty.
+func parseDateOnly(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.999Z07:00",
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Truncate(24 * time.Hour)
+		}
+	}
+	return time.Time{}
 }

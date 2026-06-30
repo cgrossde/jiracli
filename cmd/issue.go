@@ -129,11 +129,12 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		if flags.Fields != "" {
 			fields = resolveFieldList(jira.DefaultIssueFields, flags.Fields)
 		}
-		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio/StoryPoints populate.
+		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio/StoryPoints/Sprint populate.
 		for _, fid := range []string{
 			entry.Hierarchy.EpicLinkField,
 			entry.Hierarchy.PortfolioField,
 			entry.Hierarchy.StoryPointsField,
+			entry.Agile.SprintField,
 		} {
 			if fid == "" || strings.Contains(fields, fid) {
 				continue
@@ -157,6 +158,7 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		ParentLink:  entry.Hierarchy.ParentLinkField,
 		Portfolio:   entry.Hierarchy.PortfolioField,
 		StoryPoints: entry.Hierarchy.StoryPointsField,
+		SprintField: entry.Agile.SprintField,
 	}
 	rec := jira.ToIssueRecord(raw, commentsN, hf)
 
@@ -515,6 +517,27 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Portfolio:"), rec.Portfolio.Key)
 		}
 		fmt.Fprintf(&sb, "  → jiracli show hierarchy %s\n", rec.Key)
+		sb.WriteByte('\n')
+	}
+
+	// Sprint section — only when sprint field was configured and issue has sprint data.
+	if len(rec.Sprints) > 0 {
+		for _, spr := range rec.Sprints {
+			dates := ""
+			if spr.StartDate != "" || spr.EndDate != "" {
+				start := spr.StartDate
+				if len(start) >= 10 {
+					start = start[:10]
+				}
+				end := spr.EndDate
+				if len(end) >= 10 {
+					end = end[:10]
+				}
+				dates = fmt.Sprintf("  %s → %s", start, end)
+			}
+			fmt.Fprintf(&sb, "%s %s  %s%s\n", sectionLabel("Sprint:"), spr.Name, spr.State, dates)
+			fmt.Fprintf(&sb, "  → jiracli sprint show %d\n", spr.ID)
+		}
 		sb.WriteByte('\n')
 	}
 

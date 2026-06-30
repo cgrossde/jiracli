@@ -22,6 +22,7 @@ type RollupNode struct {
 	Status                string   `json:"status"`
 	StatusCategory        string   `json:"statusCategory"`
 	IssueType             string   `json:"issueType"`
+	Assignee              string   `json:"assignee,omitempty"` // display name; empty when unassigned
 	OriginalEstimateSecs  int64    `json:"originalEstimateSeconds"`
 	RemainingEstimateSecs int64    `json:"remainingEstimateSeconds"`
 	TimeSpentSecs         int64    `json:"timeSpentSeconds"`
@@ -139,6 +140,9 @@ func RollupNodeFromRaw(raw IssueRaw, spField string) RollupNode {
 		Status:    raw.Fields.Status.Name,
 		StatusCategory: raw.Fields.Status.StatusCategory.Name,
 		IssueType: raw.Fields.IssueType.Name,
+	}
+	if raw.Fields.Assignee != nil {
+		n.Assignee = raw.Fields.Assignee.DisplayName
 	}
 	if raw.Fields.TimeTracking != nil {
 		tt := raw.Fields.TimeTracking

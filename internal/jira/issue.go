@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type IssueRaw struct {
 			Name string `json:"name"`
 		} `json:"resolution"`
 		Status struct {
+			ID             string `json:"id"`
 			Name           string `json:"name"`
 			StatusCategory struct {
 				Key  string `json:"key"`
@@ -313,11 +315,21 @@ type ChildIssueRecord struct {
 	Assignee       string `json:"assignee"` // display name, "" if unassigned
 }
 
+// SprintRef is a compact sprint reference used in IssueRecord.Sprints.
+type SprintRef struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	StartDate string `json:"startDate,omitempty"`
+	EndDate   string `json:"endDate,omitempty"`
+}
+
 // IssueRecord is the NDJSON v1 schema for a single issue.
 type IssueRecord struct {
 	Key              string              `json:"key"`
 	Summary          string              `json:"summary"`
 	Status           string              `json:"status"`
+	StatusID         string              `json:"statusId,omitempty"`
 	StatusCategory   string              `json:"statusCategory"`
 	Resolution       *string             `json:"resolution"`
 	Priority         string              `json:"priority"`
@@ -344,17 +356,20 @@ type IssueRecord struct {
 	ChildrenError    string              `json:"childrenError,omitempty"`
 	TimeTracking     *TimeTrackingRecord `json:"timetracking,omitempty"`
 	StoryPoints      *float64            `json:"storyPoints,omitempty"`
+	Sprints          []SprintRef         `json:"sprints,omitempty"`
 }
 
 // HierarchyFieldIDs names the instance-specific custom field IDs used by
-// ToIssueRecord to populate Epic/Portfolio without per-call API lookups.
+// ToIssueRecord to populate Epic/Portfolio/Sprint without per-call API lookups.
 // Empty strings disable the corresponding read — caller-provided zero value
 // is valid and behaves as "no hierarchy info available".
+// SprintField is included for ergonomic threading despite not being hierarchical.
 type HierarchyFieldIDs struct {
 	EpicLink    string
 	ParentLink  string
 	Portfolio   string
 	StoryPoints string
+	SprintField string // Sprint custom field id, e.g. "customfield_11002"
 }
 
 // FieldList returns the field IDs in a stable order for use in the
@@ -372,6 +387,9 @@ func (h HierarchyFieldIDs) FieldList() []string {
 	}
 	if h.StoryPoints != "" {
 		out = append(out, h.StoryPoints)
+	}
+	if h.SprintField != "" {
+		out = append(out, h.SprintField)
 	}
 	return out
 }
@@ -411,6 +429,7 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 		Key:            raw.Key,
 		Summary:        f.Summary,
 		Status:         f.Status.Name,
+		StatusID:       f.Status.ID,
 		StatusCategory: f.Status.StatusCategory.Name,
 		IssueType:      f.IssueType.Name,
 		Created:        f.Created,
@@ -641,7 +660,100 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 		}
 	}
 
+	// Sprints — dynamic custom field, read via RawFields
+	if hf.SprintField != "" {
+		if sprintRaw, ok := raw.RawFields[hf.SprintField]; ok && len(sprintRaw) > 0 && string(sprintRaw) != "null" {
+			rec.Sprints = parseSprintRaw(sprintRaw)
+		}
+	}
+
 	return rec
+}
+
+// parseSprintRaw parses the sprint custom field which Jira DC returns in two formats:
+//
+// Newer JSON array:
+//
+//	[{"id":28037,"name":"Sprint 153","state":"active","startDate":"...","endDate":"..."}]
+//
+// Legacy string array (older Jira DC versions):
+//
+//	["com.atlassian.greenhopper...Sprint@xxx[id=28037,name=Sprint 153,state=ACTIVE,...]"]
+//
+// Returns nil on any parse error — caller silently omits the section.
+func parseSprintRaw(raw json.RawMessage) []SprintRef {
+	// Try JSON object array first.
+	var jsonSprints []struct {
+		ID        int    `json:"id"`
+		Name      string `json:"name"`
+		State     string `json:"state"`
+		StartDate string `json:"startDate"`
+		EndDate   string `json:"endDate"`
+	}
+	if err := json.Unmarshal(raw, &jsonSprints); err == nil && len(jsonSprints) > 0 {
+		refs := make([]SprintRef, 0, len(jsonSprints))
+		for _, s := range jsonSprints {
+			// Filter out zero-id entries (sometimes returned for future sprints not yet started).
+			if s.ID == 0 {
+				continue
+			}
+			refs = append(refs, SprintRef{
+				ID:        s.ID,
+				Name:      s.Name,
+				State:     strings.ToLower(s.State),
+				StartDate: s.StartDate,
+				EndDate:   s.EndDate,
+			})
+		}
+		if len(refs) > 0 {
+			return refs
+		}
+	}
+	// Try legacy string array.
+	var legacyStrings []string
+	if err := json.Unmarshal(raw, &legacyStrings); err != nil {
+		return nil
+	}
+	var refs []SprintRef
+	for _, s := range legacyStrings {
+		// Format: "com.atlassian...Sprint@xxx[id=28037,name=Sprint 153,state=ACTIVE,startDate=...,endDate=...]"
+		open := strings.Index(s, "[")
+		close := strings.LastIndex(s, "]")
+		if open < 0 || close <= open {
+			continue
+		}
+		inner := s[open+1 : close]
+		kv := make(map[string]string)
+		for _, pair := range strings.Split(inner, ",") {
+			eq := strings.Index(pair, "=")
+			if eq < 0 {
+				continue
+			}
+			k := strings.TrimSpace(pair[:eq])
+			v := strings.TrimSpace(pair[eq+1:])
+			if v == "<null>" || v == "null" {
+				v = ""
+			}
+			kv[k] = v
+		}
+		id := 0
+		if idStr, ok := kv["id"]; ok {
+			if n, err := strconv.Atoi(idStr); err == nil {
+				id = n
+			}
+		}
+		if id == 0 {
+			continue
+		}
+		refs = append(refs, SprintRef{
+			ID:        id,
+			Name:      kv["name"],
+			State:     strings.ToLower(kv["state"]),
+			StartDate: kv["startDate"],
+			EndDate:   kv["endDate"],
+		})
+	}
+	return refs
 }
 
 // ResolveActivityStatusCategories fills the FromCategory and ToCategory fields

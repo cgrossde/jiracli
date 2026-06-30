@@ -13,6 +13,6 @@ func NewConfigCmd(rawOut io.Writer) *cobra.Command {
 		Use:   "config",
 		Short: "Per-profile non-credential configuration",
 	}
-	c.AddCommand(NewConfigHierarchyCmd(rawOut))
+	c.AddCommand(NewConfigHierarchyCmd(rawOut), NewConfigAgileCmd(rawOut))
 	return c
 }

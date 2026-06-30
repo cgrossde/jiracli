@@ -19,6 +19,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
   "key":             "ACME-123",
   "summary":         "Fix login redirect",
   "status":          "In Progress",
+  "statusId":        "3",
   "statusCategory":  "In Progress",
   "resolution":      null,
   "priority":        "High",
@@ -87,12 +88,16 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
     "timeSpentSeconds":         28800
   },
   "storyPoints": 5,
+  "sprints": [
+    {"id": 2001, "name": "Sprint 42", "state": "active", "startDate": "2026-06-15", "endDate": "2026-06-29"}
+  ],
   "childrenTotal": 1
 }
 ```
 
 **Field notes:**
 - `resolution`: `null` when unresolved; string (e.g. `"Fixed"`) when resolved.
+- `statusId`: string; the Jira status ID (e.g. `"3"` for In Progress). Omitted (`omitempty`) when the issue response does not include it. Stable — status IDs do not change when a status is renamed. Cached 7 days (`statuses` key).
 - `assignee`, `reporter`: `null` when unset.
 - `parent`, `epic`: `null` when absent.
 - `portfolio`: `null` when absent (field omitted — `omitempty`); `IssueSummary` object with `key`, `summary`, `status`, `statusCategory`. Populated when hierarchy is configured for the profile and the issue has a portfolio-level parent. Summary is fetched with one extra API call.
@@ -100,6 +105,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
 - `historyTruncated`: `true` only on the changelog fallback path (DC <8.7) when the server capped results.
 - `timetracking`: object with `originalEstimateSeconds`, `remainingEstimateSeconds`, `timeSpentSeconds` (all `int64`). Omitted (`omitempty`) when absent or all-zero. Fetched on every default `show` call — no extra API round-trip.
 - `storyPoints`: `float64` | absent. Story Points value from the instance-specific custom field. Omitted when the field is not configured (`jiracli setup` discovers it) or not set on the issue.
+- `sprints`: array of `SprintRef`; omitted (`omitempty`) when the issue has no sprint data or the sprint field is not configured (`jiracli config agile`). Each entry: `id` (int), `name` (string), `state` (`"active"`, `"future"`, `"closed"`), `startDate`/`endDate` (ISO-8601 strings; omitted when absent).
 - `activityTimeline[].type`: `"transition"` when the entry contains a `status` field change; `"update"` otherwise.
 - `activityTimeline[].changes[].fromCategory`/`toCategory`: populated for `status` field changes; empty string otherwise.
 - `children`: always present as an array (never `null`); empty `[]` when the issue has no children or `--no-children` is passed. Sub-tasks come from the issue response inline; Epic children are fetched via a separate search call.
@@ -121,6 +127,7 @@ One record per issue. Produced by `internal/jira.SearchIssueRecord` (`internal/j
   "summary":        "Fix login redirect",
   "description":    "Steps to reproduce...",
   "status":         "In Progress",
+  "statusId":       "3",
   "statusCategory": "In Progress",
   "assignee":       { "name": "u1", "displayName": "Alex Chen" },
   "reporter":       { "name": "u2", "displayName": "Sam Lee" },
@@ -131,7 +138,10 @@ One record per issue. Produced by `internal/jira.SearchIssueRecord` (`internal/j
   "components":     ["Login"],
   "fixVersions":    ["4.5.0"],
   "timetracking":   { "originalEstimateSeconds": 144000, "remainingEstimateSeconds": 115200, "timeSpentSeconds": 28800 },
-  "storyPoints":    5
+  "storyPoints":    5,
+  "sprints": [
+    {"id": 2001, "name": "Sprint 42", "state": "active"}
+  ]
 }
 ```
 
@@ -145,11 +155,13 @@ The trailer is **omitted** when all results fit on the current page.
 
 **Field notes:**
 - `assignee`: `null` when unassigned.
+- `statusId`: string; the Jira status ID. Omitted (`omitempty`) when absent. Same value as in the `issue` schema — use it to join against `jiracli lookup statuses --json` output.
 - `updated`: raw Jira timestamp string (`"2006-01-02T15:04:05.000-0700"` format).
 - `labels`, `components`: empty array `[]` when absent.
 - `description`: string; omitted (`omitempty`) when empty. Populated when `--fields "description"` (or `--fields-only`) is passed.
 - `timetracking`: object with `originalEstimateSeconds`, `remainingEstimateSeconds`, `timeSpentSeconds`; omitted when absent or all-zero. Fetched in every default search (no extra flag required).
 - `storyPoints`: `float64` | absent. Omitted when the profile's Story Points field is not configured or the issue has no value.
+- `sprints`: same `SprintRef` array as issue; omitted when the sprint field is not configured or `--fields sprint` was not requested.
 - `reporter`: `IssueUserRef` (`name`, `displayName`); omitted (`omitempty`) when the issue has no reporter or when `reporter` is not in the fetched field set.
 - `fixVersions`: string array; omitted (`omitempty`) when empty or not fetched.
 
@@ -357,7 +369,10 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 
 ## rollup
 
-Command: `jiracli show rollup <KEY> [--json] [--depth N] [--list]`
+Commands:
+- `jiracli show rollup <KEY> [--json] [--depth N] [--list]` — hierarchy mode
+- `jiracli show rollup --sprint <id> [--group-by assignee] [--json]` — sprint mode
+- `jiracli show rollup --jql '<JQL>' [--group-by assignee] [--json]` — JQL mode
 
 One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jira/rollup.go`).
 
@@ -417,6 +432,7 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `status` | string | Status name |
 | `statusCategory` | string | `"To Do"`, `"In Progress"`, or `"Done"` |
 | `issueType` | string | Issue type name |
+| `assignee` | string | Display name of the assignee; omitted (`omitempty`) when unassigned |
 | `originalEstimateSeconds` | int64 | Planned time |
 | `remainingEstimateSeconds` | int64 | Remaining time |
 | `timeSpentSeconds` | int64 | Logged time |
@@ -437,4 +453,109 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `hasDeeperLevel` | bool | `true` when any L1 child has its own children |
 | `maxFetchedDepth` | int | Highest depth actually fetched (1 or 2) |
 
+> **JQL / sprint mode:** when `--jql` or `--sprint` is used instead of a `<KEY>`, `subjectIssueType` is `""` (empty string) and `subject` fields are all-zero. The `rows` array carries the group rows (`--group-by assignee`) or a single `Total` row. `hasDeeperLevel` is always `false` in this mode.
+
 No pagination trailer (single-object response).
+
+---
+
+## board list
+
+Command: `jiracli board list --project <KEY> [--json]`
+Command: `jiracli lookup boards --project <KEY> [--json]`
+
+One record per board. Produced by `internal/jira.Board` (`internal/jira/agile.go`).
+
+```json
+{"id": 101, "name": "PROJ Release Scrum", "type": "scrum"}
+```
+
+**Field notes:**
+- `type`: `"scrum"` or `"kanban"`.
+
+Pagination trailer (when more pages exist):
+```json
+{"_pagination":{"page":1,"pages":-1,"total":-1,"next_page":2,"has_more":true}}
+```
+`pages` and `total` are `-1` (sentinel) — the Agile board list endpoint does not report total page count. `has_more` is the canonical signal.
+
+---
+
+## board show
+
+Command: `jiracli board show <id> [--json]`
+
+One record per invocation. Produced by `internal/jira.BoardConfig` (`internal/jira/agile.go`).
+
+```json
+{
+  "id": 101,
+  "name": "PROJ Release Scrum",
+  "type": "scrum",
+  "columns": [
+    {"name": "To Do",       "statusIds": ["1", "10269"]},
+    {"name": "In Progress", "statusIds": ["10020", "3"]},
+    {"name": "Done",        "statusIds": ["6"]}
+  ]
+}
+```
+
+**Field notes:**
+- `columns[].statusIds`: status IDs (strings) belonging to that column. Empty array when the column has no mapped statuses.
+
+---
+
+## sprint list
+
+Command: `jiracli sprint list --board <id> [--json]`
+
+One record per sprint. Produced by `internal/jira.Sprint` (`internal/jira/agile.go`).
+
+```json
+{
+  "id":            2001,
+  "name":          "Sprint 42",
+  "state":         "active",
+  "startDate":     "2026-06-15T00:00:00.000Z",
+  "endDate":       "2026-06-29T23:59:59.000Z",
+  "activatedDate": "2026-06-15T00:00:00.000Z",
+  "originBoardId": 101,
+  "goal":          "Ship login redesign"
+}
+```
+
+**Field notes:**
+- `state`: `"active"`, `"future"`, or `"closed"`.
+- `startDate`, `endDate`, `activatedDate`, `goal`: omitted (`omitempty`) when absent.
+- `originBoardId`: the board this sprint was created on (may differ from the queried board when sprints are shared).
+
+Pagination trailer (same `_pagination` shape as search; `pages` and `total` are `-1`).
+
+---
+
+## sprint show / sprint current
+
+Commands: `jiracli sprint show <id> [--json]`, `jiracli sprint current --board <id> [--json]`
+
+`sprint show`: single `Sprint` object (same shape as sprint list above).
+`sprint current`: emits the `Sprint` object first, then one `SearchIssueRecord` per issue (same shape as search), then an optional `_pagination` trailer.
+
+---
+
+## sprintRef (embedded in issue and search)
+
+The `sprints` field on `IssueRecord` and `SearchIssueRecord` is an array of `SprintRef`:
+
+```json
+{"id": 2001, "name": "Sprint 42", "state": "active", "startDate": "2026-06-15", "endDate": "2026-06-29"}
+```
+
+|Field|Type|Notes|
+|---|---|---|
+|`id`|int|Sprint numeric ID|
+|`name`|string|Sprint name|
+|`state`|string|`"active"`, `"future"`, or `"closed"`|
+|`startDate`|string|ISO-8601; omitted when not set|
+|`endDate`|string|ISO-8601; omitted when not set|
+
+The array is omitted (`omitempty`) when the issue has no sprint data or the sprint custom field is not configured.

@@ -25,9 +25,13 @@ Results are served from a disk cache at `~/.cache/jiracli/<profile-hash>/`. Cach
 | Global priorities | `priorities` | 24h |
 | Project priority scheme | `project/<KEY>/priorityscheme` | 24h |
 | Project label aggregation | `labels/<KEY>` | 5 min |
-| Statuses | `statuses` | 24h |
+| Statuses | `statuses` | 7 days |
 | Global issue types | `issuetypes` | 24h |
 | Project issue types | `issuetypes/<KEY>` | 24h |
+| Boards (project) | `boards/<KEY>` | 1h |
+| Board config | `board/<id>/config` | 1h |
+| Active+future sprints | `sprints/<id>/active+future` | 5 min |
+| Closed sprints | `sprints/<id>/closed` | 1h |
 | User search | not cached | — |
 
 ---
@@ -419,3 +423,51 @@ allowedValues:
 
 `allowedValues` is omitted when not requested.
 
+
+---
+
+## `lookup boards`
+
+Lists Agile boards for a project.
+
+    jiracli lookup boards --project <KEY> [flags]
+
+Identical to `jiracli board list`. Both commands call `GET /rest/agile/1.0/board?projectKeyOrId=<KEY>`.
+
+### Flags
+
+|Flag|Default|Description|
+|---|---|---|
+|`--project <KEY>`|—|Project key (**required**)|
+|`--type <type>`|—|Filter by board type: `scrum` or `kanban` (client-side)|
+|`--limit N`|50|Results per page (max 100)|
+|`--page N`|1|1-indexed page|
+|`--no-cache`|false|Bypass 1h cache|
+|`--json`|false|NDJSON output|
+
+`--project` is required. Without it: `[stderr] --project required — run: jiracli lookup projects`
+
+### Plain-text output shape
+
+```
+  101       PROJ Release Scrum                        scrum
+  102       PROJ Kanban                               kanban
+
+→ jiracli sprint current --board 101
+→ jiracli board issues 102
+→ jiracli sprint list --board 101
+```
+
+### NDJSON output (`--json`)
+
+```ndjson
+{"id":101,"name":"PROJ Release Scrum","type":"scrum"}
+{"id":102,"name":"PROJ Kanban","type":"kanban"}
+```
+
+Pagination trailer when more pages exist:
+```json
+{"_pagination":{"page":1,"pages":-1,"total":-1,"next_page":2,"has_more":true}}
+```
+
+`pages` and `total` are `-1` because the Agile board endpoint does not report total page count.

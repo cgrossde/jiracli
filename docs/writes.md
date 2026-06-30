@@ -1,6 +1,6 @@
 # jiracli — Write Commands
 
-Reference for: `add comment`, `edit status`, `edit assignee`, `edit field`, `create`, `add link`, `add attachment`. For deletes, see [delete.md](delete.md).
+Reference for: `add comment`, `edit status`, `edit assignee`, `edit field`, `edit sprint`, `create`, `add link`, `add attachment`. For deletes, see [delete.md](delete.md).
 
 All write commands accept `--profile <name>` and `--yes`. Most accept `--no-cache`.
 
@@ -345,6 +345,91 @@ jiracli edit field ACME-123 "fixVersions+=4.5.0" --allow-new
 ```
 
 ---
+
+## `sprint <KEY> [KEY...] <target>`
+
+Moves one or more issues into a sprint or the backlog.
+
+    jiracli edit sprint <KEY> [KEY...] <target> [--board <id>] [--yes] [--profile <name>]
+
+The last positional argument is the **target**. All preceding positionals are issue keys.
+
+### Flags
+
+|Flag|Description|
+|---|---|
+|`--board <id>`|Scrum board ID — required when target is `current` or `next`|
+|`--yes`|Apply without confirmation|
+|`--profile <name>`|Credential profile|
+
+### Target values
+
+|Target|Meaning|
+|---|---|
+|`<numeric-id>`|Move into the sprint with that ID|
+|`current`|Active sprint on `--board <id>` (--board required)|
+|`next`|First future sprint on `--board <id>` (--board required)|
+|`backlog`|Remove from any sprint (Agile backlog endpoint)|
+
+Closed sprints are rejected. Kanban boards cannot resolve `current` or `next`.
+
+### Preview output
+
+```
+DRY RUN — no changes made.
+
+POST https://jira.example.com/rest/agile/1.0/sprint/2001/issue
+
+Body:
+  {
+    "issues": ["ACME-123","ACME-124"]
+  }
+
+Effect:
+  move 2 issue(s) into sprint 2001 "Sprint 42" (active)
+
+Validation:
+  ✓ 2 keys parsed
+  ✓ sprint 2001 is active
+  ⚠ sprint started 7d ago — late-add
+
+To apply:
+  re-run with --yes
+```
+
+For `backlog` target:
+
+```
+Effect:
+  move 2 issue(s) to backlog
+```
+
+### Success output
+
+```
+✓ moved 2 issue(s) into sprint 2001 (Sprint 42)
+  → jiracli show ACME-123
+  → jiracli show ACME-124
+```
+
+(Capped at 5 drill-down lines; `… and N more` when keys > 5.)
+
+### Multi-key
+
+    jiracli edit sprint ACME-123 ACME-124 ACME-125 current --board 101 --yes
+
+All keys are moved in a single POST. Partial failures (Jira returns per-key errors) are surfaced in a `Failed:` block; exit code is non-zero.
+
+### Errors
+
+- Invalid key: `[stderr] not a valid issue key: "bad-key"`
+- Closed sprint: `[stderr] cannot move issues into closed sprint 2001 (Sprint 41)`
+- Missing `--board` for `current`/`next`: `[stderr] --board required for target "current"`
+- Kanban board: `[stderr] board 102 is kanban and does not support sprints`
+- No active sprint: `[stderr] no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future`
+
+---
+
 
 ## `create`
 
