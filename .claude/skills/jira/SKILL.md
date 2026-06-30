@@ -29,11 +29,15 @@ Run `jiracli auth --help` for more.
 ### Read an issue
 ```sh
 jiracli show PROJ-123
-jiracli show PROJ-123 PROJ-124 PROJ-125   # multiple issues with separators
-jiracli show assigned                      # issues assigned to you
-jiracli show transitions PROJ-123          # available statuses before transitioning
+jiracli show PROJ-123 PROJ-124 PROJ-125    # multiple issues with separators
+jiracli show assigned                       # issues assigned to you
+jiracli show transitions PROJ-123           # available statuses before transitioning
+jiracli show comments PROJ-123             # full comment thread
+jiracli show history PROJ-123              # changelog
+jiracli show PROJ-123 --parent             # show the parent issue (walks up: subtask→story→epic)
+jiracli open PROJ-123 --print-url          # get the browse URL without opening a browser
 ```
-Run `jiracli show --help` for flags (`--no-history`, `--comments N`, `--parent`, `--fields`, rollup, hierarchy, and more).
+Run `jiracli show --help` for all flags and subcommands (`--no-history`, `--comments N`, `--fields`, and more).
 
 ### Search
 ```sh
@@ -49,6 +53,21 @@ All issues are returned by default **including Done** — use `--exclude-done` t
 **`--keys-only` prints one key per line** — pipe into `jiracli show -`, `edit status`, or `xargs`. Also available on `show assigned`.
 
 Run `jiracli search --help` for pagination, field selection, and more.
+
+### Bulk operations
+The standard agent pattern for operating on a set of issues:
+```sh
+# Triage: read all assigned issues in full
+jiracli show assigned --keys-only | jiracli show -
+
+# Bulk transition matching issues
+jiracli search --keys-only --jql "project = PROJ AND sprint in openSprints() AND assignee = currentUser()" \
+  | xargs jiracli edit status Done --yes
+
+# Any edit command accepts multiple keys before the value
+jiracli edit status   PROJ-1 PROJ-2 PROJ-3 "In Review"   # dry-run
+jiracli edit assignee PROJ-1 PROJ-2 PROJ-3 me --yes
+```
 
 ### Transition, assign, edit fields
 ```sh
@@ -69,6 +88,17 @@ jiracli create --from-draft new-issue.yaml   # preview
 jiracli create --from-draft new-issue.yaml --yes
 ```
 Run `jiracli create --help` for all fields.
+
+### Hierarchy & rollup
+```sh
+jiracli show hierarchy PROJ-123            # tree: Initiative → Epic → Stories
+jiracli show hierarchy PROJ-123 --open     # non-Done issues only
+jiracli show hierarchy PROJ-123 --depth 2  # two levels of descendants
+jiracli show rollup    PROJ-123            # aggregate time + story points across children
+jiracli show rollup    PROJ-123 --list     # per-child breakdown
+jiracli show rollup    PROJ-123 --depth 2  # include grandchildren
+```
+Works on any issue type — Epic aggregates its Stories; Initiative aggregates its Epics. Requires hierarchy fields to be configured (`jiracli setup`). Run `jiracli show hierarchy --help` and `jiracli show rollup --help` for more.
 
 ### Lookup metadata
 Jira metadata (components, versions, priorities, link types, users) is project-specific — never guess. Run `lookup` before any write that names one of them.
