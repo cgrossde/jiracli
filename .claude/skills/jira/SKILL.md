@@ -1,9 +1,9 @@
 ---
 name: jira
 description: >
-  Read, search, comment on, transition, and create Jira issues.
-  Use whenever the user mentions a Jira ticket, asks to search Jira,
-  or asks to write/update a ticket.
+  Read, search, comment on, transition, and create Jira issues. Also boards,
+  sprints, and sprint membership. Use whenever the user mentions a Jira ticket,
+  asks to search Jira, or asks to write/update a ticket.
 allowed-tools:
   - Bash
   - Read
@@ -11,9 +11,9 @@ allowed-tools:
 
 # /jira
 
-You have `jiracli` on PATH. **The CLI is self-documenting — run `jiracli --help` or `jiracli <command> --help` whenever you are unsure of flags or syntax.** The plain-text output also contains drill-down hints (lines starting with `→`) that show the exact next command to run; follow them rather than guessing.
+You have `jiracli` on PATH. **The CLI is self-documenting — run `jiracli --help` or `jiracli <command> --help` whenever you are unsure of flags or syntax.** Plain-text output contains `→` drill-down hints showing the exact next command to run; follow them rather than guessing.
 
-**Do not use `--json` for normal agent use.** Plain-text output is richer, self-navigating, and easier to reason about. Reserve `--json` only when you need to pass structured data to another tool or script.
+**Do not use `--json` for normal agent use.** Plain-text output is richer and self-navigating. Reserve `--json` for passing structured data to another tool or script.
 
 ---
 
@@ -21,132 +21,97 @@ You have `jiracli` on PATH. **The CLI is self-documenting — run `jiracli --hel
 
 ### Auth
 ```sh
-jiracli auth status          # check current profile and whether the PAT is valid
-jiracli auth reauth          # re-enter PAT for the active profile
+jiracli auth status          # check current profile and PAT validity
 jiracli auth profile --list  # list profiles; set default with: jiracli auth profile <name>
 ```
+Run `jiracli auth --help` for more.
 
-### Show
+### Read an issue
 ```sh
 jiracli show PROJ-123
-jiracli show PROJ-123 PROJ-124 PROJ-125          # multiple issues, separated by rules
-jiracli search --keys-only --assigned | jiracli show -  # stdin mode: one key per line
-jiracli show assigned
-jiracli show assigned --category in-progress
-jiracli show transitions PROJ-123        # check available statuses before transitioning
-jiracli show PROJ-123:attach:10042 -o    # stream attachment to stdout
-jiracli show PROJ-123:attach:10042 -f ./file.png  # download to disk
+jiracli show PROJ-123 PROJ-124 PROJ-125   # multiple issues with separators
+jiracli show assigned                      # issues assigned to you
+jiracli show transitions PROJ-123          # available statuses before transitioning
 ```
-The output contains `→` drill-down hints for comments, history, and attachments. Follow them rather than constructing those commands yourself. Attachment IDs appear as `(id: …)` in the attachments section of `jiracli show PROJ-123`.
-
-**Multiple keys / stdin mode**: pass multiple keys as positional args, or pass `-` as the sole argument to read keys from stdin (one per line). Blank lines and `# comment` lines are skipped — so `--keys-only` output pipes in cleanly. In multi-key mode each issue is preceded by a `━━━ KEY (N/M) ━━━` separator; errors on individual keys are printed inline and the loop continues.
-
-### Time estimates & Story Points
-```sh
-jiracli show PROJ-123           # Estimates: block + progress bar + Story Points line appear automatically when data exists
-jiracli show rollup PROJ-100    # aggregate time + SP across all children of an Epic
-jiracli show rollup PROJ-100 --all  # page through all children (not just first 100)
-jiracli show rollup PROJ-100 --json # structured output: epicKey, total, buckets, unestimated
-```
-Story Points and the Estimates block require hierarchy fields to be configured. Run `jiracli config hierarchy --json` and check for `storyPointsField` — if missing, run `jiracli config hierarchy --rediscover`.
-
+Run `jiracli show --help` for flags (`--no-history`, `--comments N`, `--parent`, `--fields`, rollup, hierarchy, and more).
 
 ### Search
 ```sh
 jiracli search "project = PROJ AND priority = High"
-jiracli search "project = PROJ" --assigned
-jiracli search "project = PROJ" --exclude-done   # hide Done issues
-jiracli search --jql 'text ~ "KSP" AND project = CAR'  # --jql for queries with quoted literals
-jiracli search --keys-only --assigned             # one key per line — pipe into further commands
-jiracli search --keys-only "project = PROJ AND fixVersion = 5.2"
+jiracli search "project = PROJ" --assigned --exclude-done
+jiracli search --jql 'text ~ "some phrase" AND project = PROJ'   # use --jql for quoted literals
+jiracli search --keys-only --assigned | jiracli show -            # pipe keys into show
 ```
-All issues are returned by default, **including Done**. Use `--exclude-done` to hide them. The effective JQL is echoed on the first line — read it to confirm the query is what you intended.
+All issues are returned by default **including Done** — use `--exclude-done` to hide them. The effective JQL is echoed on the first output line; read it to confirm the query.
 
-**Use `--jql` instead of positional args whenever the JQL contains quoted string literals** (e.g. `text ~ "term"`, `summary ~ "foo bar"`). Shell quoting can mangle the joined positional args; `--jql` passes the entire query as one string and bypasses the join entirely. `--jql` and positional JQL args are mutually exclusive.
+**Use `--jql` whenever the JQL contains quoted string literals** (`text ~ "term"`, `summary ~ "foo bar"`). Shell quoting mangles positional args; `--jql` passes the whole query as one string.
 
-**`--keys-only` prints one issue key per line** — no headers, no formatting. Ideal for piping into `jiracli show`, `edit status`, or `xargs`. When more pages exist, the last line is `# next: <cmd>` (filter with `grep -v '^#'` if needed). Also available on `show assigned`.
+**`--keys-only` prints one key per line** — pipe into `jiracli show -`, `edit status`, or `xargs`. Also available on `show assigned`.
 
-```sh
-# Review piped keys one by one
-jiracli search --keys-only --assigned --category in-progress | jiracli show -
-
-# Quick multi-key review
-jiracli show CAR-1 CAR-2 CAR-3
-```
+Run `jiracli search --help` for pagination, field selection, and more.
 
 ### Transition, assign, edit fields
 ```sh
-jiracli edit status   PROJ-123 "In Review"                        # single, dry-run
-jiracli edit status   PROJ-123 PROJ-124 PROJ-125 Done --yes       # bulk
+jiracli edit status   PROJ-123 "In Review"                   # dry-run first
+jiracli edit status   PROJ-123 PROJ-124 Done --yes           # bulk apply
 jiracli edit assignee PROJ-123 me
-jiracli edit assignee PROJ-123 PROJ-124 PROJ-125 me --yes         # bulk
 jiracli edit field    PROJ-123 "priority=High" "labels+=regression"
-jiracli edit field    PROJ-123 PROJ-124 PROJ-125 "labels+=triage" --yes  # bulk
 ```
-
-**Bulk writes**: all bulk commands (status/assignee/field) share the same conventions — preview lists all planned operations; execution is sequential with per-key error reporting (failures don't abort the rest). Always dry-run first (omit `--yes`), confirm, then re-run with `--yes`.
-
-For `edit field`, leading args without `=` are keys; the first arg containing `=` starts the spec list. Specs are applied identically to every key.
-
-### Add
-```sh
-jiracli add comment    PROJ-123 "Your comment here."
-jiracli add link       PROJ-123 PROJ-456 --type Blocks
-jiracli add attachment PROJ-123 screenshot.png
-```
+All edits default to dry-run; pass `--yes` to apply. Bulk: list all keys before the value. Run `jiracli edit --help` for all subcommands.
 
 ### Create an issue
 ```sh
-# Inline
-jiracli create --project PROJ --type Bug --summary "..." --assignee me
+jiracli create --project PROJ --type Bug --summary "..." --yes
 
 # Draft workflow — preferred for anything non-trivial
-jiracli create --init-draft new-issue.yaml   # generates a YAML template
-# edit new-issue.yaml
-jiracli create --from-draft new-issue.yaml   # preview with full validation
+jiracli create --init-draft new-issue.yaml   # generates a template
+jiracli create --from-draft new-issue.yaml   # preview
 jiracli create --from-draft new-issue.yaml --yes
 ```
+Run `jiracli create --help` for all fields.
 
-### Lookup
-
-Jira metadata (components, versions, priorities, link types, assignees) is project-specific — you cannot guess these values. Run `lookup` before any write that names one of them, or the CLI will reject it.
-
+### Lookup metadata
+Jira metadata (components, versions, priorities, link types, users) is project-specific — never guess. Run `lookup` before any write that names one of them.
 ```sh
-jiracli lookup components --project PROJ
-jiracli lookup priorities --project PROJ
 jiracli lookup users "alex" --project PROJ
+jiracli lookup components --project PROJ
 jiracli lookup link-types
 ```
+Run `jiracli lookup --help` to see all subcommands.
 
-More subcommands: run `jiracli lookup --help`.
-
-### Delete
+### Boards & Sprints
 ```sh
-jiracli delete PROJ-123                          # single issue
-jiracli delete PROJ-123 PROJ-124 PROJ-125        # bulk issues
-jiracli delete PROJ-123:comment:9421             # single comment
-jiracli delete PROJ-123:attach:10042             # single attachment
-jiracli delete PROJ-123:link:5860223             # single link
+jiracli board list --project PROJ          # boards for a project
+jiracli board show 1234                    # columns and board type
+jiracli board show 1234 --details          # + filter name, owner, JQL
+jiracli sprint list --board 1234           # active + future sprints
+jiracli sprint current --board 1234        # active sprint with embedded issue list
+jiracli sprint issues 5678                 # issues in a specific sprint
+jiracli edit sprint PROJ-123 current --board 1234  # move issue to current sprint (dry-run)
+jiracli edit sprint PROJ-123 backlog               # remove from sprint
 ```
-The type is inferred from the ref shape. Multi-key only applies when every arg is a bare issue key — compound refs (comment/attach/link) always require a single argument. Link IDs appear as `(id: …)` on each link line in `jiracli show` output. `rm` is an alias for `delete`.
+If `sprint current` reports multiple active sprints, pass `--sprint <id>` to pick one explicitly. Run `jiracli sprint --help` and `jiracli board --help` for more.
 
-### Open in browser
+### Add & delete
 ```sh
-jiracli open PROJ-123                    # open issue in browser
-jiracli open PROJ-123:comment:9421       # jump to a specific comment
-jiracli open PROJ-123 --print-url        # just print the URL
+jiracli add comment PROJ-123 "comment text"
+jiracli add link    PROJ-123 PROJ-456 --type "is related to"
+jiracli delete PROJ-123                    # issue (dry-run; add --yes to apply)
+jiracli delete PROJ-123:comment:9421       # comment — id from jiracli show output
+jiracli delete PROJ-123:link:5860223       # link — id from jiracli show output
 ```
-
-There is more — multiple profiles and more. **Run `jiracli --help` and `jiracli <command> --help` to discover them.**
+Run `jiracli add --help` and `jiracli delete --help` for more.
 
 ---
 
 ## Rules that `--help` won't tell you
 
-**Always preview before applying.** Every write defaults to dry-run. Show the preview to the user and ask "Apply?" before re-running with `--yes`. Never pass `--yes` on the first call unless the user explicitly said "just do it."
+**Always preview before applying.** Every write defaults to dry-run. Show the preview and ask "Apply?" before re-running with `--yes`. Never pass `--yes` on the first call unless the user explicitly said so.
 
-**Look up before writing.** See the Lookup section above. The CLI will refuse with a corrective error if a name is invalid — use that error's suggested lookup command.
+**Look up before writing.** Metadata names (components, priorities, users, link types) are project-specific. The CLI will refuse with a corrective error if a name is wrong — use that error's suggested `lookup` command.
 
 **Filter on `statusCategory`, not status name.** Status names vary by project. The three universal values are `"To Do"`, `"In Progress"`, `"Done"`. Use these in JQL.
 
-**Truncated output.** Outputs over ~200 lines are written to `/tmp/jiracli-output/output-N.txt` with exploration hints inline. Use `grep`/`head`/`tail` on that file rather than re-running.
+**Truncated output** (>200 lines) is written to `/tmp/jiracli-output/output-N.txt` with exploration hints inline. Use `grep`/`head`/`tail` on that file rather than re-running.
+
+**When in doubt, run `--help`.** `jiracli --help`, `jiracli <command> --help`, and `jiracli <command> <subcommand> --help` are always up to date and cover every flag. The skill covers the most common cases; help covers everything.
