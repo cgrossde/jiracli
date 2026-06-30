@@ -34,7 +34,8 @@ jiracli show assigned                       # issues assigned to you
 jiracli show transitions PROJ-123           # available statuses before transitioning
 jiracli show comments PROJ-123             # full comment thread
 jiracli show history PROJ-123              # changelog
-jiracli show PROJ-123 --parent             # show the parent issue (walks up: subtask→story→epic)
+jiracli show PROJ-123 --parent             # show the immediate parent (one level only)
+jiracli show hierarchy PROJ-123            # full upward chain: Story → Epic → Initiative/Portfolio (use this for hierarchy lookups)
 jiracli open PROJ-123 --print-url          # get the browse URL without opening a browser
 ```
 Run `jiracli show --help` for all flags and subcommands (`--no-history`, `--comments N`, `--fields`, and more).
@@ -97,8 +98,14 @@ jiracli show hierarchy PROJ-123 --depth 2  # two levels of descendants
 jiracli show rollup    PROJ-123            # aggregate time + story points across children
 jiracli show rollup    PROJ-123 --list     # per-child breakdown
 jiracli show rollup    PROJ-123 --depth 2  # include grandchildren
+jiracli show rollup    PROJ-123 --limit 500  # fetch up to 500 children (default cap is 100)
+jiracli show rollup    PROJ-123 --all      # fetch all children, no cap
+# JQL/sprint mode — no hierarchy config needed
+jiracli show rollup --sprint 46463 --group-by assignee   # time breakdown per person
+jiracli show rollup --sprint 46463                       # single Total row
+jiracli show rollup --jql 'project = TRIP AND updated >= "2026-04-01"'
 ```
-Works on any issue type — Epic aggregates its Stories; Initiative aggregates its Epics. Requires hierarchy fields to be configured (`jiracli setup`). Run `jiracli show hierarchy --help` and `jiracli show rollup --help` for more.
+Works on any issue type — Epic aggregates its Stories; Initiative/Portfolio aggregates its Epics. Use `jiracli show rollup INIT-123 --list` to see how much time was planned, spent, and remaining across all epics in an initiative. Requires hierarchy fields to be configured (`jiracli setup`). Run `jiracli show hierarchy --help` and `jiracli show rollup --help` for more.
 
 ### Lookup metadata
 Jira metadata (components, versions, priorities, link types, users) is project-specific — never guess. Run `lookup` before any write that names one of them.
@@ -145,3 +152,5 @@ Run `jiracli add --help` and `jiracli delete --help` for more.
 **Truncated output** (>200 lines) is written to `/tmp/jiracli-output/output-N.txt` with exploration hints inline. Use `grep`/`head`/`tail` on that file rather than re-running.
 
 **When in doubt, run `--help`.** `jiracli --help`, `jiracli <command> --help`, and `jiracli <command> <subcommand> --help` are always up to date and cover every flag. The skill covers the most common cases; help covers everything.
+
+**Use `show hierarchy` to find where a ticket sits in the hierarchy.** `--parent` only walks one level. When asked which epic, initiative, portfolio item, or any higher-level parent a ticket belongs to — or when mapping a set of tickets up the hierarchy — use `jiracli show hierarchy PROJ-123`. It returns the full chain (e.g. Story → Epic → Initiative/Portfolio) in a single call. Do not chain `--parent` calls.

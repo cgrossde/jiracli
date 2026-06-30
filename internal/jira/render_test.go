@@ -242,8 +242,13 @@ func TestFormatSeconds(t *testing.T) {
 		{3660, "1h1m"},
 		{7200, "2h"},
 		{7320, "2h2m"},
-		{144000, "40h"}, // 40h exactly
-		{57600, "16h"},  // 16h
+		{28800, "1d"},           // exactly 1 workday (8h)
+		{28860, "1d1m"},         // 1d + 1m (no hours component)
+		{32400, "1d1h"},         // 1d + 1h
+		{32460, "1d1h1m"},       // 1d + 1h + 1m
+		{57600, "2d"},           // 2 workdays (16h)
+		{144000, "5d"},          // 5 workdays (40h)
+		{5379840, "186d6h24m"},  // real value: 1494h24m (186*8*3600 + 6*3600 + 24*60)
 	}
 	for _, tc := range tests {
 		got := FormatSeconds(tc.secs)

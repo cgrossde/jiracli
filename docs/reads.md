@@ -950,7 +950,8 @@ Aggregates over the result set of an arbitrary JQL query or a single sprint. Doe
 |---|---|---|
 | `--depth N` | 1 | Depth to aggregate (hierarchy mode only). 1 = direct children only; 2 = children + grandchildren. Capped at 2. |
 | `--list` | false | Print a per-issue breakdown table beneath the summary |
-| `--all` | false | Page through all issues (bypasses 100-result default cap) |
+| `--limit N` | 100 | Max children to fetch per level. Increase to see more; use `--all` to fetch everything. |
+| `--all` | false | Fetch all children, bypassing the `--limit` cap |
 | `--jql <query>` | — | Aggregate over this JQL result set. Mutex with `<KEY>` and `--sprint`. |
 | `--sprint <id>` | — | Aggregate over issues in this sprint id. Mutex with `<KEY>` and `--jql`. |
 | `--group-by assignee` | — | Break down rows by assignee. Only valid with `--jql` or `--sprint`. |
@@ -965,10 +966,10 @@ Fix login page timeout
 
                                          Planned   Remaining       Spent          SP
 ──────────────────────────────────────────────────────────────────────────────────────
-Epic ACME-100 (own)                         240h         58h        240h           —
-Level 1 — 8 Storys                           96h         80h         16h    22 (5/8)
+Epic ACME-100 (own)                          30d        7d2h          30d           —
+Level 1 — 8 Storys                           12d         10d           2d    22 (5/8)
 ──────────────────────────────────────────────────────────────────────────────────────
-Total                                       336h        138h        256h          22
+Total                                         42d       17d2h          32d          22
 
 [██████████████████░░░░░░] · 76% spent
 
@@ -1010,7 +1011,7 @@ Appended beneath the summary. When multiple children share a long common prefix,
 Children:
   Key             Summary                                                  Planned   Remaining       Spent          SP
   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  ACME-101        Fix login page timeout ▸                                     16h          8h          8h           2
+  ACME-101        Fix login page timeout ▸                                      2d        1d          1d           2
   ACME-102        Add dark mode toggle                                            —           —           —           5
   ACME-103        Implement shared-prefix titl…erent unique ending here ▸         —           —           —           —
 ```

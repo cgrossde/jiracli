@@ -29,7 +29,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
 | `show hierarchy <KEY>` | `--profile`, `--json`, `--all`, `--open`, `--status`, `--depth N`, `--flat`, `--since` | Walk Initiative → Epic → Subject → Children for an issue |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
-|`show rollup [<KEY>]`|`--profile`, `--json`, `--all`, `--depth N`, `--list`, `--jql`, `--sprint`, `--group-by`|Aggregate time + story-point estimates. Hierarchy mode (`<KEY>`): walks children. JQL/sprint mode (`--jql` or `--sprint`): aggregates over a result set; `--group-by assignee` breaks down by person. `--list` prints per-issue table.|
+|`show rollup [<KEY>]`|`--profile`, `--json`, `--all`, `--limit N`, `--depth N`, `--list`, `--jql`, `--sprint`, `--group-by`|Aggregate time + story-point estimates. Hierarchy mode (`<KEY>`): walks children. JQL/sprint mode (`--jql` or `--sprint`): aggregates over a result set; `--group-by assignee` breaks down by person. `--list` prints per-issue table. `--limit N` caps children per level (default 100); `--all` fetches everything, overriding `--limit`.|
 | `search [<jql...>]` | `--profile`, `--json`, `--keys-only`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category`, `--jql`, `--time` | Search issues; `--time` adds Estimate/Remaining/Spent columns (shorthand for three `--fields` entries); all other flags unchanged |
 | `open <ref>` | `--profile`, `--print-url` | Open issue/comment/attachment in browser |
 | `lookup users` | `--profile`, `--project`, `--active`, `--limit`, `--json` | Search users |

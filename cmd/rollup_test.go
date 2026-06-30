@@ -79,13 +79,13 @@ func TestRenderRollupTree_WithEstimates(t *testing.T) {
 	if !strings.Contains(out, "Total") {
 		t.Errorf("missing Total row")
 	}
-	// Own row shows 240h
-	if !strings.Contains(out, "240h") {
-		t.Errorf("expected 240h (own TT) in output, got:\n%s", out)
+	// Own row shows 30d (240h / 8h per workday)
+	if !strings.Contains(out, "30d") {
+		t.Errorf("expected 30d (own TT, was 240h) in output, got:\n%s", out)
 	}
-	// L1 row shows 96h planned
-	if !strings.Contains(out, "96h") {
-		t.Errorf("expected 96h (children planned) in output, got:\n%s", out)
+	// L1 row shows 12d planned (96h / 8h per workday)
+	if !strings.Contains(out, "12d") {
+		t.Errorf("expected 12d (children planned, was 96h) in output, got:\n%s", out)
 	}
 }
 
@@ -226,9 +226,9 @@ func TestRenderRollupTree_TotalAllLevels(t *testing.T) {
 	}
 
 	out := renderRollupTree(raw, tree, false, 2, false, "")
-	// Total planned must be 336h (own 240 + L1 96 + L2 0), not 240h (own + deepest).
-	if !strings.Contains(out, "336h") {
-		t.Errorf("expected Total to be 336h (own+L1+L2), got:\n%s", out)
+	// Total planned must be 42d (336h / 8h per workday: own 240 + L1 96 + L2 0).
+	if !strings.Contains(out, "42d") {
+		t.Errorf("expected Total to be 42d (was 336h, own+L1+L2), got:\n%s", out)
 	}
 	if !strings.Contains(out, "Total (all levels)") {
 		t.Errorf("expected 'Total (all levels)' label at depth 2, got:\n%s", out)

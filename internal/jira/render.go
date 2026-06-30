@@ -422,20 +422,37 @@ func AbbreviateChange(field, from, to string, statusMarker string) string {
 
 // FormatSeconds converts a Jira time-in-seconds value to a human-readable string.
 // Jira stores time in seconds; typical granularity is 1h = 3600s.
+// Uses Jira's default workday convention (1d = 8h) to produce days where applicable.
 // Returns "" when secs <= 0.
 func FormatSeconds(secs int64) string {
 	if secs <= 0 {
 		return ""
 	}
-	h := secs / 3600
-	m := (secs % 3600) / 60
-	if h > 0 && m > 0 {
+	const (
+		secsPerMin  = 60
+		secsPerHour = 3600
+		secsPerDay  = 8 * secsPerHour // Jira default: 1 workday = 8h
+	)
+	d := secs / secsPerDay
+	rem := secs % secsPerDay
+	h := rem / secsPerHour
+	m := (rem % secsPerHour) / secsPerMin
+	switch {
+	case d > 0 && h > 0 && m > 0:
+		return fmt.Sprintf("%dd%dh%dm", d, h, m)
+	case d > 0 && h > 0:
+		return fmt.Sprintf("%dd%dh", d, h)
+	case d > 0 && m > 0:
+		return fmt.Sprintf("%dd%dm", d, m)
+	case d > 0:
+		return fmt.Sprintf("%dd", d)
+	case h > 0 && m > 0:
 		return fmt.Sprintf("%dh%dm", h, m)
-	}
-	if h > 0 {
+	case h > 0:
 		return fmt.Sprintf("%dh", h)
+	default:
+		return fmt.Sprintf("%dm", m)
 	}
-	return fmt.Sprintf("%dm", m)
 }
 
 // ProgressPercent returns floor(100*spent/planned). Returns 0 when planned <= 0.

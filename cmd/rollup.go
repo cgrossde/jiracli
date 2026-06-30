@@ -17,7 +17,8 @@ import (
 type ShowRollupFlags struct {
 	Profile string
 	JSON    bool
-	All     bool   // page through all children instead of capping at 100
+	All     bool   // --all: fetch all children, overrides Limit
+	Limit   int    // --limit N: max children per level (default 100); ignored when All is true
 	Depth   int    // 1 = subject + L1; 2 = subject + L1 + L2
 	List    bool   // also print per-child table
 	JQL     string // --jql: aggregate over arbitrary JQL result set instead of a hierarchy subject
@@ -87,7 +88,8 @@ a hierarchy.  Add --group-by assignee to break down by person.`,
 	}
 	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
 	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON")
-	c.Flags().BoolVar(&flags.All, "all", false, "Page through all children (bypass 100-result cap)")
+	c.Flags().BoolVar(&flags.All, "all", false, "Fetch all children, bypassing the --limit cap")
+	c.Flags().IntVar(&flags.Limit, "limit", 100, "Max children to fetch per level (default 100); use --all to fetch everything")
 	c.Flags().IntVar(&flags.Depth, "depth", 1, "Levels to aggregate: 1 = direct children only, 2 = children + their children")
 	c.Flags().BoolVar(&flags.List, "list", false, "Print a per-child breakdown table beneath the summary")
 	c.Flags().StringVar(&flags.JQL, "jql", "", "Aggregate time tracking over JQL results instead of a hierarchy. Mutex with <KEY> and --sprint.")
@@ -101,6 +103,11 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 	// JQL / sprint path — no hierarchy subject needed.
 	if flags.JQL != "" || flags.Sprint != 0 {
 		return showRollupJQL(ctx, flags)
+	}
+	// Resolve effective fetch limit: --all overrides --limit (0 = no cap in fetchNodes).
+	limit := flags.Limit
+	if flags.All {
+		limit = 0
 	}
 
 	parsed, err := jira.ParseRef(ref)
@@ -163,7 +170,7 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 	childJQL := jira.ChildJQL(subjectRaw.Fields.IssueType.Name, key, epicLinkField, parentLinkField)
 
 	// Fetch L1 children.
-	l1Nodes, l1Total, l1Truncated, err := fetchNodes(ctx, client, childJQL, childFields, flags.All, spField)
+	l1Nodes, l1Total, l1Truncated, err := fetchNodes(ctx, client, childJQL, childFields, limit, spField)
 	if err != nil {
 		return "", fmt.Errorf("fetching children of %s: %w", key, err)
 	}
@@ -208,7 +215,7 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 				continue
 			}
 			l2JQL := jira.ChildJQL(l1.IssueType, l1.Key, epicLinkField, parentLinkField)
-			nodes, total, trunc, fetchErr := fetchNodes(ctx, client, l2JQL, childFields, flags.All, spField)
+			nodes, total, trunc, fetchErr := fetchNodes(ctx, client, l2JQL, childFields, limit, spField)
 			if fetchErr != nil {
 				// fail-soft: record truncation but continue
 				l2Truncated = true
@@ -269,7 +276,9 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 }
 
 // fetchNodes pages through a JQL search and returns RollupNodes.
-func fetchNodes(ctx context.Context, client *jira.Client, jql string, fields []string, all bool, spField string) (nodes []jira.RollupNode, total int, truncated bool, err error) {
+// limit controls how many nodes to fetch: 0 means fetch all (no cap); any
+// positive value stops once that many nodes have been collected.
+func fetchNodes(ctx context.Context, client *jira.Client, jql string, fields []string, limit int, spField string) (nodes []jira.RollupNode, total int, truncated bool, err error) {
 	const pageSize = 100
 	page := 1
 	for {
@@ -288,9 +297,13 @@ func fetchNodes(ctx context.Context, client *jira.Client, jql string, fields []s
 			// Count subtasks as childrenTotal indicator.
 			n.ChildrenTotal = len(raw.Fields.Subtasks)
 			nodes = append(nodes, n)
+			if limit > 0 && len(nodes) >= limit {
+				break
+			}
 		}
+		hitLimit := limit > 0 && len(nodes) >= limit
 		startAt := (page-1)*pageSize + len(resp.Issues)
-		if startAt >= resp.Total || len(resp.Issues) == 0 || !all {
+		if hitLimit || startAt >= resp.Total || len(resp.Issues) == 0 {
 			break
 		}
 		page++
@@ -304,6 +317,11 @@ func fetchNodes(ctx context.Context, client *jira.Client, jql string, fields []s
 // showRollupJQL aggregates time-tracking over an arbitrary JQL result set or sprint,
 // optionally grouped by assignee.
 func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
+	// Resolve effective fetch limit: --all overrides --limit (0 = no cap in fetchNodes).
+	limit := flags.Limit
+	if flags.All {
+		limit = 0
+	}
 	entry, err := resolveEntry(flags.Profile)
 	if err != nil {
 		return "", err
@@ -321,7 +339,7 @@ func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 		fields = append(fields, spField)
 	}
 
-	nodes, total, truncated, err := fetchNodes(ctx, client, jql, fields, flags.All, spField)
+	nodes, total, truncated, err := fetchNodes(ctx, client, jql, fields, limit, spField)
 	if err != nil {
 		return "", fmt.Errorf("fetching issues for rollup: %w", err)
 	}
@@ -617,7 +635,7 @@ func renderRollupTree(subjectRaw jira.IssueRaw, tree jira.RollupTree, hasDeeperL
 				sumTrunc += " ▸"
 			}
 			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-				keyW, jira.TruncateString(n.Key, keyW),
+				keyW, n.Key,
 				sumW, sumTrunc,
 				colW, dashIfZero(n.OriginalEstimateSecs),
 				colW, dashIfZero(n.RemainingEstimateSecs),
@@ -625,7 +643,7 @@ func renderRollupTree(subjectRaw jira.IssueRaw, tree jira.RollupTree, hasDeeperL
 				colW, sp)
 		}
 		if l1Truncated {
-			fmt.Fprintf(&sb, "  (first 100 shown — pass --all for full list)\n")
+			fmt.Fprintf(&sb, "  (first %d shown — pass --limit <n> or --limit 0 for all)\n", len(tree.Nodes))
 		}
 		sb.WriteByte('\n')
 	}
@@ -727,7 +745,7 @@ func renderRollupJQL(tree jira.RollupTree) string {
 				sp = fmt.Sprintf("%g", *n.StoryPoints)
 			}
 			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-				keyW, jira.TruncateString(n.Key, keyW),
+				keyW, n.Key,
 				sumW, jira.TruncateString(n.Summary, sumW),
 				colW, dashIfZero(n.OriginalEstimateSecs),
 				colW, dashIfZero(n.RemainingEstimateSecs),
