@@ -21,8 +21,12 @@ const (
 	TTLPriorities   = 24 * time.Hour
 	TTLPrioritySchm = 24 * time.Hour
 	TTLLabels       = 5 * time.Minute
-	TTLStatuses     = 24 * time.Hour
+	TTLStatuses     = 7 * 24 * time.Hour
 	TTLIssueTypes   = 24 * time.Hour
+	TTLBoards        = 1 * time.Hour
+	TTLBoardConfig   = 1 * time.Hour
+	TTLSprintsActive = 1 * time.Hour
+	TTLSprintsClosed = 7 * 24 * time.Hour
 )
 
 // UserRef is a lightweight Jira user reference used in lookup results.
@@ -88,8 +92,9 @@ type Field struct {
 	Name   string `json:"name"`
 	Custom bool   `json:"custom"`
 	Schema *struct {
-		Type  string `json:"type"`
-		Items string `json:"items,omitempty"`
+		Type   string `json:"type"`
+		Items  string `json:"items,omitempty"`
+		Custom string `json:"custom,omitempty"`
 	} `json:"schema,omitempty"`
 }
 
