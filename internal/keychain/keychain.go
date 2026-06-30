@@ -51,6 +51,7 @@ type HierarchyConfig struct {
 	ParentLinkField    string    `json:"parentLinkField,omitempty"`
 	PortfolioField     string    `json:"portfolioField,omitempty"`
 	PortfolioFieldName string    `json:"portfolioFieldName,omitempty"`
+	StoryPointsField   string    `json:"storyPointsField,omitempty"`
 	DiscoveredAt       time.Time `json:"discoveredAt,omitempty"`
 }
 

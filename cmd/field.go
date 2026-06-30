@@ -26,8 +26,8 @@ type fieldSetFlags struct {
 func newFieldSetCmd() *cobra.Command {
 	var flags fieldSetFlags
 	c := &cobra.Command{
-		Use:   "field <KEY> <spec...>",
-		Short: "Set one or more issue fields (dry-run by default; use --yes to apply)",
+		Use:   "field <KEY> [KEY...] <spec...>",
+		Short: "Set one or more fields on one or more issues (dry-run by default; use --yes to apply)",
 		Long: `Spec format: name=value  name+=value  name-=value
 
 Operators:
@@ -37,18 +37,48 @@ Operators:
 
 Value prefix @ reads from file: description=@desc.md
 
+Keys vs specs: leading args without = are treated as issue keys; the first
+arg containing = starts the spec list. At least one key and one spec required.
+
+  edit field ACME-123 "priority=High"
+  edit field ACME-123 ACME-124 ACME-125 "labels+=triage" --yes
+
 See also:
   jiracli lookup fields --project <KEY>    discover field names and IDs
   jiracli lookup priorities --project <KEY> valid priority values
   jiracli lookup users --project <KEY>     valid assignee values
   jiracli lookup labels --project <KEY>    valid label values`,
 		Example: `  jiracli edit field ACME-123 "priority=High"
-  jiracli edit field ACME-123 "labels+=regression" --yes
+  jiracli edit field ACME-123 ACME-124 "labels+=regression" --yes
   jiracli edit field ACME-123 "description=@desc.md" --yes
   jiracli edit field ACME-123 "labels-=stale" "labels+=current" --yes`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := FieldSet(cmd.Context(), flags, args[0], args[1:])
+			// Split: leading args without '=' are keys; remainder are specs.
+			splitAt := len(args)
+			for i, a := range args {
+				if strings.ContainsAny(a, "=") {
+					splitAt = i
+					break
+				}
+			}
+			keys := args[:splitAt]
+			specs := args[splitAt:]
+			if len(keys) == 0 {
+				return fmt.Errorf("at least one issue key required before the first spec")
+			}
+			if len(specs) == 0 {
+				return fmt.Errorf("at least one field spec required (e.g. priority=High)")
+			}
+			if len(keys) == 1 {
+				result, err := FieldSet(cmd.Context(), flags, keys[0], specs)
+				if err != nil {
+					return err
+				}
+				fmt.Fprint(cmd.OutOrStdout(), result)
+				return nil
+			}
+			result, err := FieldSetBulk(cmd.Context(), flags, keys, specs)
 			if err != nil {
 				return err
 			}
@@ -309,4 +339,74 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 	return HandleWrite(ctx, client, entry.URL, p, flags.Yes, func(_ []byte) string {
 		return fmt.Sprintf("✓ updated %s (%d field(s))\n  → jiracli show %s\n", key, n, key)
 	})
+}
+
+// FieldSetBulk applies the same field specs to multiple issues.
+//
+// Dry-run: calls FieldSet in dry-run mode for the first key to produce a
+// representative preview, then lists all target keys. On --yes: executes
+// FieldSet sequentially with per-key error collection.
+func FieldSetBulk(ctx context.Context, flags fieldSetFlags, keys []string, tokens []string) (string, error) {
+	// Build a representative dry-run preview using the first key.
+	dryFlags := flags
+	dryFlags.Yes = false
+	samplePreview, err := FieldSet(ctx, dryFlags, keys[0], tokens)
+	if err != nil {
+		// Error on first key (e.g. invalid spec) — abort before touching anything.
+		return "", fmt.Errorf("spec validation failed on %s: %w", keys[0], err)
+	}
+
+	// Build combined preview: sample effect + full key list.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("apply to %d issue(s):\n", len(keys)))
+	for _, key := range keys {
+		sb.WriteString(fmt.Sprintf("  %s\n", key))
+	}
+	sb.WriteString("\nSpec preview (from " + keys[0] + "):\n")
+	// Indent the sample preview for readability.
+	for _, line := range strings.Split(strings.TrimRight(samplePreview, "\n"), "\n") {
+		sb.WriteString("  " + line + "\n")
+	}
+	preview := sb.String()
+
+	// Apply or return preview.
+	doApply := flags.Yes
+	if !doApply {
+		apply, ttyAvailable := promptApply()
+		if !ttyAvailable {
+			return preview + "\nApply with: re-run with --yes\n", nil
+		}
+		if !apply {
+			return preview + "\naborted\n", nil
+		}
+		doApply = true
+	}
+	_ = doApply
+
+	// Execute sequentially with per-key error collection.
+	applyFlags := flags
+	applyFlags.Yes = true
+	var applyErrs []string
+	var okKeys []string
+	for _, key := range keys {
+		if _, err := FieldSet(ctx, applyFlags, key, tokens); err != nil {
+			applyErrs = append(applyErrs, fmt.Sprintf("  %s: %v", key, err))
+		} else {
+			okKeys = append(okKeys, key)
+		}
+	}
+
+	var out strings.Builder
+	out.WriteString(preview + "\n")
+	for _, key := range okKeys {
+		out.WriteString(fmt.Sprintf("✓ updated %s\n", key))
+	}
+	if len(applyErrs) > 0 {
+		out.WriteString("\nFailed:\n")
+		for _, e := range applyErrs {
+			out.WriteString(e + "\n")
+		}
+		return out.String(), fmt.Errorf("%d of %d updates failed", len(applyErrs), len(keys))
+	}
+	return out.String(), nil
 }

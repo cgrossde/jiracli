@@ -75,6 +75,8 @@ Field names match Jira's own field IDs. Standard names usable with `--fields`:
 | `timeestimate` | `Remaining` | Add with `timeestimate`; formatted as `2h30m` |
 | `timeoriginalestimate` | `Estimate` | Add with `timeoriginalestimate` |
 | `timespent` | `Spent` | Add with `timespent` |
+| `timetracking` | `Estimates:` block | **Fetched by default.** Shows `Planned / Remaining / Spent` + progress bar when non-zero. |
+| Story Points field ID | `Story Points:` | Fetched and displayed when discovered at setup (run `jiracli config hierarchy --json` to see `storyPointsField`). |
 | `customfield_XXXXX` | raw ID | Any custom field ID from `jiracli lookup fields` |
 
 ### Plain-text output shape
@@ -85,6 +87,10 @@ ACME-123  In Progress · Bug · High
 
 Assignee: Alex Chen (u1)               Reporter: Sam Patel
 Created:  2026-05-10                   Updated: 2026-06-22
+
+Estimates: Planned 40h · Remaining 32h · Spent 8h
+[████████░░░░░░░░░░░░░░░░] 20% spent
+Story Points: 5
 
 Epic: ACME-100  "Epic summary"
 Portfolio: ACME-50  "Modernise authentication platform"  (Open)
@@ -207,6 +213,18 @@ Single object (v1 schema, additive-only):
 - Not found: `[stderr] issue NOPE-1 not found (HTTP 404) — check the key, or your PAT may lack browse permission on the project`, exit 1.
 - 401: `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
 
+### Multi-key and stdin mode
+
+`show` accepts multiple issue keys as positional arguments, or `-` to read keys from stdin:
+
+    jiracli show ACME-123 ACME-124 ACME-125
+    jiracli search --keys-only --assigned | jiracli show -
+
+- Each issue is preceded by a `━━━ KEY (N/M) ━━━` rule.
+- Per-key errors (not found, invalid ref) are printed inline; the loop continues.
+- Pass `-` as the sole argument to read one key per line from stdin. Blank lines and lines starting with `#` are ignored — so `--keys-only` output pipes in without filtering.
+- Compound refs (`:attach:`, `:comment:`) require a single argument and cannot be mixed with multi-key.
+
 ---
 
 ## `search [<jql...>]`
@@ -237,6 +255,7 @@ bypassing the join:
 | `--fields-only <list>` | — | Restrict to exactly these fields (replaces defaults; mutex with `--fields`) |
 | `--json` | false | NDJSON output |
 | `--profile <name>` | default | Credential profile |
+| `--keys-only` | false | Print one issue key per line — no headers, no footer, no overflow. Bypasses Layer 2 presenter. |
 
 ### Default behaviour
 
@@ -246,9 +265,9 @@ The effective JQL is always echoed on the first line of plain-text output. `stat
 
 ### Columns and `--fields` reference
 
-Default columns: `key, status, issuetype, priority, assignee, updated, summary`
+Default fields fetched: `key, status, issuetype, priority, assignee, updated, summary, labels, components, timetracking`. The `timetracking` field is fetched by default but only appears in `--json` output (via `timetracking` key) or in the `show` command's Estimates block. Plain-text search output remains unchanged.
 
-`--fields` adds to or drops from the default columns. Syntax: `"name"` or `"+name"` to add, `"-name"` to drop.
+`--fields` adds to or drops from the default display columns. Syntax: `"name"` or `"+name"` to add, `"-name"` to drop.
 
 | Name | Label shown | Notes |
 |---|---|---|
@@ -321,6 +340,19 @@ One object per issue, then an optional `_pagination` trailer when more pages exi
 
 The `_pagination` object is emitted as the last line only when `has_more` is true. Consumers can ignore objects whose top-level key starts with `_`.
 
+### `--keys-only` — pipe-friendly output
+
+    jiracli search --keys-only --assigned
+    jiracli search --keys-only "project = ACME AND status = 'In Review'"
+
+Prints one issue key per line. No headers, no formatting, no `[exit:N]` footer. The `[exit:N]` footer is suppressed entirely (same as `--json`). When more pages exist, the final line is:
+
+    # next: jiracli search --page 2 --limit 50 --assigned --keys-only
+
+The `# next:` line can be detected with `grep -v '^#'` if a pure-keys stream is needed. Also available on `show assigned --keys-only`.
+
+Only the `key` field is fetched from the Jira API — no wasted field deserialization.
+
 ---
 
 ## `assigned`
@@ -341,6 +373,7 @@ Convenience wrapper over `search`. Defaults to `assignee = currentUser() AND sta
 | `--page N` | 1-indexed page |
 | `--json` | NDJSON output |
 | `--profile <name>` | Credential profile |
+| `--keys-only` | Print one issue key per line (no headers, no footer); ideal for piping |
 
 Output is identical to `search`. The header line shows the effective JQL so the caller can see exactly what was run. The default-open filter is not applied separately — the JQL is pre-built and complete.
 
@@ -647,6 +680,84 @@ In JSON mode, `"descendantsTruncated": true` is set on the root object.
 - Non-issue ref: `[stderr] show hierarchy requires a plain issue key — got "ACME-123:comment:9421"`, exit 1.
 
 ---
+
+## `rollup <EPIC-KEY>`
+
+Aggregates time estimates and Story Points across all children of an Epic. Produces totals, a status-category breakdown table, a progress bar, and a list of unestimated children.
+
+    jiracli show rollup <EPIC-KEY> [flags]
+
+Requires the profile to have hierarchy fields configured (`jiracli setup --reconfigure` or `jiracli config hierarchy --rediscover`). Story Points are included automatically when `storyPointsField` is set in the profile.
+
+### Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--json` | false | Output as a single JSON object |
+| `--all` | false | Page through all children (bypasses 100-result default cap) |
+| `--profile <name>` | default | Credential profile |
+
+### Plain-text output shape
+
+```
+[Epic]  ACME-100  In Progress · 2 - High
+[Login] Fix login page timeout
+Fix Versions: 4.5.0   Children: 8
+
+Estimates: Planned 96h · Remaining 80h · Spent 16h
+[████░░░░░░░░░░░░░░░░░░░░] · 16% spent
+Story Points: 22 SP (5 of 8 children pointed)
+
+Breakdown by status:
+  Status          Children   Planned  Remaining    Logged    SP
+  ────────────────────────────────────────────────────────────
+  To Do                  3         —         —         —    10
+  In Progress            3       96h       80h       16h    12
+  Done                   2         —         —         —     —
+  ────────────────────────────────────────────────────────────
+  Total                  8       96h       80h       16h    22
+
+Unestimated children (5 of 8):
+  [Story]  ACME-206    Open            Dark mode toggle
+  [Story]  ACME-204    Open            Reproduce login timeout on mobile…
+  ...
+
+→ jiracli search "\"Epic Link\" = ACME-100 AND originalEstimate is EMPTY"
+
+[exit:0 | Xms]
+```
+
+Progress bar color: white ≤99% spent, orange 100–119%, red ≥120%.
+
+### JSON output shape
+
+```json
+{
+  "epicKey":       "ACME-100",
+  "total":         { "category": "Total", "children": 8, "originalEstimateSeconds": 345600, "remainingEstimateSeconds": 288000, "timeSpentSeconds": 57600, "storyPoints": 22, "estimatedChildren": 3, "pointedChildren": 5 },
+  "buckets":       [ { "category": "To Do", ... }, { "category": "In Progress", ... }, { "category": "Done", ... } ],
+  "unestimated":   [ { "key": "ACME-206", "summary": "...", "status": "Open", ... } ],
+  "truncated":     false,
+  "totalChildren": 8
+}
+```
+
+`truncated` is `true` when `--all` was not passed and the epic has more than 100 children.
+
+### Notes
+
+- Rollup aggregates children's time estimates only (not the Epic's own `timetracking` field). "Estimated" means `originalEstimate > 0`; SP-only children count as unestimated for the time bar.
+- When `--all` is not set and the Epic has > 100 children, a footer warns `(showing N of M children — pass --all to walk every child)`.
+- Unestimated list: max 15 shown; `…and N more` appended when there are more.
+
+### Errors
+
+- Subject is not an Epic: `[stderr] rollup only operates on Epics — PROJ-123 is a Story. For subtask rollup, use jiracli show PROJ-123`, exit 1.
+- No children: `Epic PROJ-123 has no children — nothing to roll up.`, exit 0.
+- Invalid ref: `[stderr] show rollup requires a plain issue key — got "<input>"`, exit 1.
+
+---
+
 
 ## `attachments <KEY>`
 

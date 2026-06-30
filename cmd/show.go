@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -15,23 +18,30 @@ import (
 //   - Plain issue key (ACME-123) or browse URL → full issue
 //   - KEY:attach:ID compound ref             → attachment metadata (or download with -o)
 //   - KEY:comment:ID compound ref            → single comment display
-//
 func NewShowCmd(rawOut io.Writer) *cobra.Command {
 	// Merge issue flags and attachment-download flags onto the root command.
 	var issueFlags IssueFlags
 	var attachFlags AttachmentDownloadFlags
 
 	root := &cobra.Command{
-		Use:   "show <ref>",
+		Use:   "show <ref> [ref...]",
 		Short: "Show issues and their facets (default: full issue)",
 		Long: `Read-only views of a Jira issue or attachment.
 
 The argument is parsed as a reference and dispatched automatically:
 
   show ACME-123                   full issue (plain key or browse URL)
+  show ACME-123 ACME-124          multiple issues, separated by a rule
+  show -                          read keys from stdin (one per line)
   show ACME-123:attach:42         attachment metadata
   show ACME-123:attach:42 -o      stream attachment content to stdout
   show ACME-123:attach:42 -f path download attachment to file
+
+Stdin mode: pass - as the sole argument to read one issue key per line from
+stdin. Blank lines and lines starting with # are ignored. This composes
+directly with --keys-only:
+
+  jiracli search --keys-only --assigned | jiracli show -
 
 Subcommands drill into a specific facet by plain key:
   show comments ACME-123          comment thread
@@ -58,37 +68,85 @@ Common flags (on the default issue view):
 Activity shows the newest 10 entries. Long-text fields (description) are
 always suppressed; comment/summary/environment are truncated to 120 chars.
 Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ref, err := jira.ParseRef(args[0])
-			if err != nil {
-				return fmt.Errorf("invalid ref %q: %w", args[0], err)
+			// Resolve the effective list of refs: stdin mode, multi, or single.
+			refs := args
+			if len(args) == 1 && args[0] == "-" {
+				// Stdin mode: read one key per line, skip blanks and comments.
+				scanner := bufio.NewScanner(os.Stdin)
+				refs = nil
+				for scanner.Scan() {
+					line := strings.TrimSpace(scanner.Text())
+					if line == "" || strings.HasPrefix(line, "#") {
+						continue
+					}
+					refs = append(refs, line)
+				}
+				if err := scanner.Err(); err != nil {
+					return fmt.Errorf("reading stdin: %w", err)
+				}
+				if len(refs) == 0 {
+					return fmt.Errorf("no keys read from stdin")
+				}
 			}
-			switch ref.Kind {
-			case jira.RefIssue:
-				if issueFlags.CommentsN > 25 {
-					return fmt.Errorf("--comments max is 25 — use jiracli show comments %s --limit %d for a longer thread", args[0], issueFlags.CommentsN)
-				}
-				result, err := Issue(cmd.Context(), issueFlags, args[0])
+			if len(refs) == 0 {
+				return fmt.Errorf("requires at least one ref (issue key, browse URL, or compound ref) or - to read from stdin")
+			}
+
+			multi := len(refs) > 1
+			for i, rawRef := range refs {
+				ref, err := jira.ParseRef(rawRef)
 				if err != nil {
-					return err
+					if multi {
+						fmt.Fprintf(cmd.OutOrStdout(), "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ %s (%d/%d)\n", rawRef, i+1, len(refs))
+						fmt.Fprintf(cmd.OutOrStdout(), "error: invalid ref %q: %v\n\n", rawRef, err)
+						continue
+					}
+					return fmt.Errorf("invalid ref %q: %w", rawRef, err)
 				}
-				fmt.Fprint(cmd.OutOrStdout(), result)
-			case jira.RefAttachment:
-				if attachFlags.Stdout {
-					return attachmentToStdout(cmd.Context(), attachFlags, args[0], rawOut)
+				if multi {
+					fmt.Fprintf(cmd.OutOrStdout(), "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ %s (%d/%d)\n", ref.Key, i+1, len(refs))
 				}
-				result, err := AttachmentDownload(cmd.Context(), attachFlags, args[0])
-				if err != nil {
-					return err
+				switch ref.Kind {
+				case jira.RefIssue:
+					if issueFlags.CommentsN > 25 {
+						return fmt.Errorf("--comments max is 25 — use jiracli show comments %s --limit %d for a longer thread", rawRef, issueFlags.CommentsN)
+					}
+					result, err := Issue(cmd.Context(), issueFlags, rawRef)
+					if err != nil {
+						if multi {
+							fmt.Fprintf(cmd.OutOrStdout(), "error: %v\n\n", err)
+							continue
+						}
+						return err
+					}
+					fmt.Fprint(cmd.OutOrStdout(), result)
+					if multi {
+						fmt.Fprintln(cmd.OutOrStdout())
+					}
+				case jira.RefAttachment:
+					if multi {
+						return fmt.Errorf("attachment refs cannot be used with multiple keys")
+					}
+					if attachFlags.Stdout {
+						return attachmentToStdout(cmd.Context(), attachFlags, rawRef, rawOut)
+					}
+					result, err := AttachmentDownload(cmd.Context(), attachFlags, rawRef)
+					if err != nil {
+						return err
+					}
+					fmt.Fprint(cmd.OutOrStdout(), result)
+				case jira.RefComment:
+					if multi {
+						return fmt.Errorf("comment refs cannot be used with multiple keys")
+					}
+					result, err := ShowComment(cmd.Context(), ShowCommentFlags{Profile: issueFlags.Profile, JSON: issueFlags.JSON}, rawRef)
+					if err != nil {
+						return err
+					}
+					fmt.Fprint(cmd.OutOrStdout(), result)
 				}
-				fmt.Fprint(cmd.OutOrStdout(), result)
-			case jira.RefComment:
-				result, err := ShowComment(cmd.Context(), ShowCommentFlags{Profile: issueFlags.Profile, JSON: issueFlags.JSON}, args[0])
-				if err != nil {
-					return err
-				}
-				fmt.Fprint(cmd.OutOrStdout(), result)
 			}
 			return nil
 		},
@@ -124,6 +182,7 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 		NewAttachmentsCmd(),
 		NewAssignedCmd(),
 		NewShowHierarchyCmd(),
+		NewShowRollupCmd(),
 	)
 	return root
 }

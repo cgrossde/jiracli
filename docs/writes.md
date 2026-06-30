@@ -130,6 +130,27 @@ Moves an issue to a new status via a workflow transition.
 [exit:1 | Xms]
 ```
 
+### Multi-key bulk transition
+
+    jiracli edit status ACME-123 ACME-124 ACME-125 Done
+    jiracli edit status ACME-123 ACME-124 ACME-125 Done --yes
+
+The last argument is always the transition name or numeric ID. All preceding arguments are issue keys.
+
+With multiple keys, the preview lists every planned operation:
+
+```
+transition 3 issue(s) → Done
+
+  ACME-123         In Progress → Done
+  ACME-124         In Review → Done
+  ACME-125         To Do → Done
+
+Apply with: re-run with --yes
+```
+
+Transition resolution failures (transition not available on a key) are listed in a "Skipped" block and do not block the rest of the batch. Execution is sequential; per-key errors are collected and reported at the end rather than aborting.
+
 ---
 
 ## `assign <KEY> <user>`
@@ -178,13 +199,34 @@ or, when unassigning:
 [exit:1 | Xms]
 ```
 
+### Multi-key bulk assign
+
+    jiracli edit assignee ACME-123 ACME-124 ACME-125 alice
+    jiracli edit assignee ACME-123 ACME-124 ACME-125 alice --yes
+
+The last argument is always the user or ID. User is resolved once (from the first key's project context) and applied to all keys.
+
+Dry-run preview:
+
+```
+assign to Jane Smith (alice) 3 issue(s)
+
+  ACME-123
+  ACME-124
+  ACME-125
+
+Apply with: re-run with --yes
+```
+
+Execution is sequential with per-key error collection.
+
 ---
 
 ## `field set <KEY> <spec...>`
 
 Universal field mutator. Updates description, labels, components, fixVersions, priority, assignee, and custom fields via `PUT /issue/<KEY>`.
 
-    jiracli edit field <KEY> <spec...> [--allow-new] [--yes] [--no-cache] [--profile <name>]
+    jiracli edit field <KEY> [KEY...] <spec...> [--allow-new] [--yes] [--no-cache] [--profile <name>]
 
 ### Flags
 
@@ -210,6 +252,29 @@ Each `<spec>` token is `name<op>value`. Always quote each spec token — the ope
 - Value `-` on single-value user fields (e.g. `assignee=-`): unassigns.
 
 Multi-value op on a single-value field → hard error: `field "priority" is single-value; use priority=<v>, not priority+=<v>`.
+
+### Multi-key bulk field edit
+
+    jiracli edit field ACME-123 ACME-124 ACME-125 "labels+=triage"
+    jiracli edit field ACME-123 ACME-124 "priority=2 - High" --yes
+
+Leading arguments without `=` are treated as issue keys; the first argument containing `=` starts the spec list. At least one key and one spec are required.
+
+The spec is validated against the first key. The dry-run preview shows:
+
+```
+apply to 2 issue(s):
+  ACME-123
+  ACME-124
+
+Spec preview (from ACME-123):
+  DRY RUN — no changes made.
+  ...
+
+Apply with: re-run with --yes
+```
+
+On `--yes`: executes sequentially, collecting per-key errors rather than aborting on first failure.
 
 ### Validation
 

@@ -12,7 +12,7 @@ The write safety model (preview → confirm → apply) is identical to the `add`
 
 `delete` infers what to delete from the ref shape — no subcommand required:
 
-    jiracli delete <ref> [--yes] [--profile <name>]
+    jiracli delete <ref> [ref...] [--yes] [--profile <name>]
 
 | Ref form | What is deleted |
 |---|---|
@@ -20,6 +20,9 @@ The write safety model (preview → confirm → apply) is identical to the `add`
 | `ACME-123:comment:NNN` | One comment |
 | `ACME-123:attach:NNN` | One attachment |
 | `ACME-123:link:NNN` | One issue link |
+| `ACME-123 ACME-124 ACME-125` | Multiple issues (bulk delete) |
+
+Multi-key mode only applies when every argument is a bare issue key. Comment, attachment, and link refs always require a single argument.
 
 IDs appear inline in `jiracli show <KEY>` output. Link hints are copy-paste ready:
 
@@ -97,6 +100,44 @@ Jira has no endpoint to fetch a link by ID, so existence cannot be pre-checked. 
 ### Success output
 
     ✓ deleted issue link 5860223 from ACME-123
+
+---
+
+## Bulk issue delete
+
+Delete multiple issues in one command:
+
+    jiracli delete ACME-123 ACME-124 ACME-125
+    jiracli delete ACME-123 ACME-124 ACME-125 --yes
+
+All keys are validated before any delete is executed. If any key is not found or has subtasks (without `--with-subtasks`), the entire operation is blocked:
+
+```
+[stderr] cannot proceed — resolve the following first:
+  ACME-124 not found
+  ACME-125 has 2 subtask(s) — pass --with-subtasks to cascade
+[exit:1 | Xms]
+```
+
+Dry-run preview:
+
+```
+delete 3 issue(s):
+
+  − ACME-123  "Fix login page timeout"
+  − ACME-124  "Add dark mode toggle"
+  − ACME-125  "Upgrade TLS stack"  ⚠ +2 subtask(s)
+
+Apply with: re-run with --yes
+```
+
+On `--yes`: deletes sequentially. Per-key errors (e.g. a concurrent delete) are collected and reported after all others succeed — the batch does not abort on first failure.
+
+### Success output
+
+    ✓ deleted ACME-123
+    ✓ deleted ACME-124
+    ✓ deleted ACME-125
 
 ---
 

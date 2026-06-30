@@ -238,8 +238,11 @@ func WrapWithPresenter(c *cobra.Command, finalOut io.Writer, finalErr io.Writer)
 		err := original(cmd, args)
 		elapsed := time.Since(start)
 
-		// JSON mode: bypass presenter — footer corrupts the NDJSON stream.
-		if jsonMode, _ := cmd.Flags().GetBool("json"); jsonMode {
+		// Machine-output bypass: --json and --keys-only both produce output for
+		// programs/pipes; the [exit:N | Xms] footer would corrupt both streams.
+		jsonMode, _ := cmd.Flags().GetBool("json")
+		keysOnly, _ := cmd.Flags().GetBool("keys-only")
+		if jsonMode || keysOnly {
 			if buf.Len() > 0 {
 				fmt.Fprint(finalOut, buf.String())
 			}

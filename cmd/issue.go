@@ -48,7 +48,7 @@ Fields reference (--fields / --fields-only):
                   timeestimate, timeoriginalestimate, timespent
   Any Jira field ID is also accepted (e.g. customfield_10031).
   Use jiracli lookup fields to list all available field IDs.`,
-		Args:  cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.CommentsN > 25 {
 				return fmt.Errorf("--comments max is 25 — use jiracli show comments %s --limit %d for a longer thread", args[0], flags.CommentsN)
@@ -129,10 +129,11 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		if flags.Fields != "" {
 			fields = resolveFieldList(jira.DefaultIssueFields, flags.Fields)
 		}
-		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio populate.
+		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio/StoryPoints populate.
 		for _, fid := range []string{
 			entry.Hierarchy.EpicLinkField,
 			entry.Hierarchy.PortfolioField,
+			entry.Hierarchy.StoryPointsField,
 		} {
 			if fid == "" || strings.Contains(fields, fid) {
 				continue
@@ -152,9 +153,10 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 	}
 
 	hf := jira.HierarchyFieldIDs{
-		EpicLink:   entry.Hierarchy.EpicLinkField,
-		ParentLink: entry.Hierarchy.ParentLinkField,
-		Portfolio:  entry.Hierarchy.PortfolioField,
+		EpicLink:    entry.Hierarchy.EpicLinkField,
+		ParentLink:  entry.Hierarchy.ParentLinkField,
+		Portfolio:   entry.Hierarchy.PortfolioField,
+		StoryPoints: entry.Hierarchy.StoryPointsField,
 	}
 	rec := jira.ToIssueRecord(raw, commentsN, hf)
 
@@ -238,7 +240,7 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		return string(data) + "\n", nil
 	}
 
-	return renderIssue(rec, flags, fieldSet), nil
+	return renderIssue(rec, flags, fieldSet, entry.Hierarchy.StoryPointsField), nil
 }
 
 // resolveParentKey fetches the minimal fields of key and returns the parent key
@@ -284,7 +286,6 @@ func resolveParentKey(ctx context.Context, client *jira.Client, store *cache.Sto
 
 	return "", fmt.Errorf("no parent found for %s — issue has no Parent Link, Parent, or Epic Link", key)
 }
-
 
 // resolveFieldList applies +add / -drop semantics to the default field list.
 // Bare names add. "+name" is accepted as an alias for "name". "-name" drops.
@@ -405,7 +406,7 @@ func fieldIn(fieldSet map[string]bool, name string) bool {
 // fieldSet, when non-nil, is the set of fields that were actually fetched from
 // the API (replacement --fields spec). Sections whose key fields are absent are
 // skipped rather than rendered with empty values.
-func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]bool) string {
+func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]bool, spField string) string {
 	var sb strings.Builder
 
 	// Header line: type-badge  KEY  status-badge · priority
@@ -453,6 +454,36 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 				sectionLabel("Created:"), createdDate,
 				sectionLabel("Updated:"), updatedDate)
 		}
+		sb.WriteByte('\n')
+	}
+
+	// Estimates / Time tracking block
+	showTT := fieldIn(fieldSet, "timetracking")
+	showSP := spField == "" || fieldIn(fieldSet, spField)
+	if showTT && rec.TimeTracking != nil {
+		tt := rec.TimeTracking
+		var parts []string
+		if tt.OriginalEstimateSeconds > 0 {
+			parts = append(parts, "Planned "+jira.FormatSeconds(tt.OriginalEstimateSeconds))
+		}
+		if tt.RemainingEstimateSeconds > 0 {
+			parts = append(parts, "Remaining "+jira.FormatSeconds(tt.RemainingEstimateSeconds))
+		}
+		if tt.TimeSpentSeconds > 0 {
+			parts = append(parts, "Spent "+jira.FormatSeconds(tt.TimeSpentSeconds))
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Estimates:"), strings.Join(parts, " · "))
+		}
+		if tt.OriginalEstimateSeconds > 0 {
+			bar := jira.FormatProgressBar(tt.TimeSpentSeconds, tt.OriginalEstimateSeconds, 24, clr)
+			fmt.Fprintf(&sb, "%s\n", bar)
+		}
+	}
+	if showSP && rec.StoryPoints != nil {
+		fmt.Fprintf(&sb, "%s %g\n", sectionLabel("Story Points:"), *rec.StoryPoints)
+	}
+	if (showTT && rec.TimeTracking != nil) || (showSP && rec.StoryPoints != nil) {
 		sb.WriteByte('\n')
 	}
 

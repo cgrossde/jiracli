@@ -81,6 +81,13 @@ func ConfigHierarchy(ctx context.Context, out io.Writer, flags ConfigHierarchyFl
 		} else {
 			fmt.Fprintf(out, "  (Parent Link field not found — Advanced Roadmaps not installed?)\n")
 		}
+		if fid, _, err := client.ResolveFieldID(ctx, "Story Points", store, true); err == nil {
+			entry.Hierarchy.StoryPointsField = fid
+			fmt.Fprintf(out, "✓ Story Points = %s\n", fid)
+			changed = true
+		} else {
+			fmt.Fprintf(out, "  (Story Points field not found — Jira Software not installed?)\n")
+		}
 
 		// Tier 2: portfolio candidate scan + interactive selection.
 		// Skipped when --portfolio is also set (explicit flag wins).
@@ -170,6 +177,7 @@ func ConfigHierarchy(ctx context.Context, out io.Writer, flags ConfigHierarchyFl
 	fmt.Fprintf(&sb, "  Parent Link      : %s\n", orDash(entry.Hierarchy.ParentLinkField))
 	fmt.Fprintf(&sb, "  Portfolio        : %s\n", orDash(entry.Hierarchy.PortfolioField))
 	fmt.Fprintf(&sb, "  Portfolio (name) : %s\n", orDash(entry.Hierarchy.PortfolioFieldName))
+	fmt.Fprintf(&sb, "  Story Points     : %s\n", orDash(entry.Hierarchy.StoryPointsField))
 	if !entry.Hierarchy.DiscoveredAt.IsZero() {
 		fmt.Fprintf(&sb, "  Discovered at    : %s\n", entry.Hierarchy.DiscoveredAt.Format(time.RFC3339))
 	}
@@ -191,6 +199,7 @@ func orDash(s string) string {
 	}
 	return s
 }
+
 // formatProbe renders a single FieldProbe as a status line.
 func formatProbe(p jira.FieldProbe) string {
 	icon := "✓"

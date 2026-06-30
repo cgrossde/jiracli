@@ -114,3 +114,104 @@ func DeleteIssue(ctx context.Context, flags DeleteIssueFlags, key string) (strin
 	}
 	return preview + "\n" + fmt.Sprintf("✓ deleted issue %s\n", key), nil
 }
+
+// DeleteIssueBulk deletes multiple issues.
+//
+// Dry-run: validates every key exists (and checks for subtasks), prints a
+// combined table, then prompts once (TTY) or exits with "Apply with: --yes".
+// On --yes: executes sequentially, collects per-key errors, reports all at end.
+func DeleteIssueBulk(ctx context.Context, flags DeleteIssueFlags, keys []string) (string, error) {
+	profile := flags.Profile
+	if profile == "" {
+		var perr error
+		profile, perr = keychain.ResolveDefault()
+		if perr != nil {
+			return "", fmt.Errorf("no credentials — run: jiracli setup")
+		}
+	}
+	entry, err := keychain.Load(profile)
+	if err != nil {
+		return "", fmt.Errorf("credentials not found for profile %q — run: jiracli setup", profile)
+	}
+	client := jira.New(entry)
+
+	// Phase 1: validate every key exists; collect summaries.
+	type row struct {
+		key      string
+		summary  string
+		subtasks int
+		invalid  bool
+		errMsg   string
+	}
+	rows := make([]row, len(keys))
+	var blockErrs []string
+	for i, key := range keys {
+		raw, gerr := client.GetIssue(ctx, key, "key,summary,subtasks", false)
+		if gerr != nil {
+			rows[i] = row{key: key, invalid: true, errMsg: fmt.Sprintf("%s not found", key)}
+			blockErrs = append(blockErrs, "  "+rows[i].errMsg)
+			continue
+		}
+		n := len(raw.Fields.Subtasks)
+		if n > 0 && !flags.WithSubtasks {
+			rows[i] = row{key: key, invalid: true, errMsg: fmt.Sprintf("%s has %d subtask(s) — pass --with-subtasks to cascade", key, n)}
+			blockErrs = append(blockErrs, "  "+rows[i].errMsg)
+			continue
+		}
+		rows[i] = row{key: key, summary: raw.Fields.Summary, subtasks: n}
+	}
+	if len(blockErrs) > 0 {
+		return "", fmt.Errorf("cannot proceed — resolve the following first:\n%s", strings.Join(blockErrs, "\n"))
+	}
+
+	// Phase 2: preview.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("delete %d issue(s):\n\n", len(rows)))
+	for _, r := range rows {
+		line := fmt.Sprintf("  − %-16s  %q", r.key, r.summary)
+		if r.subtasks > 0 {
+			line += fmt.Sprintf("  ⚠ +%d subtask(s)", r.subtasks)
+		}
+		sb.WriteString(line + "\n")
+	}
+	preview := sb.String()
+
+	// Phase 3: apply or return preview.
+	doApply := flags.Yes
+	if !doApply {
+		apply, ttyAvailable := promptApply()
+		if !ttyAvailable {
+			return preview + "\nApply with: re-run with --yes\n", nil
+		}
+		if !apply {
+			return preview + "\naborted\n", nil
+		}
+		doApply = true
+	}
+	_ = doApply
+
+	// Phase 4: execute sequentially, collect errors.
+	var applyErrs []string
+	var okKeys []string
+	for _, r := range rows {
+		if err := client.DeleteIssue(ctx, r.key, flags.WithSubtasks); err != nil {
+			applyErrs = append(applyErrs, fmt.Sprintf("  %s: %v", r.key, err))
+		} else {
+			okKeys = append(okKeys, r.key)
+		}
+	}
+
+	var out strings.Builder
+	out.WriteString(preview + "\n")
+	for _, key := range okKeys {
+		out.WriteString(fmt.Sprintf("✓ deleted %s\n", key))
+	}
+	if len(applyErrs) > 0 {
+		out.WriteString("\nFailed:\n")
+		for _, e := range applyErrs {
+			out.WriteString(e + "\n")
+		}
+		return out.String(), fmt.Errorf("%d of %d deletes failed", len(applyErrs), len(rows))
+	}
+	return out.String(), nil
+}

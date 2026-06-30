@@ -81,6 +81,12 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
   "children": [
     {"key":"ACME-124","summary":"Fix timeout in checkout","status":"In Progress","statusCategory":"In Progress","issueType":"Story","assignee":"Jane Smith"}
   ],
+  "timetracking": {
+    "originalEstimateSeconds":  144000,
+    "remainingEstimateSeconds": 115200,
+    "timeSpentSeconds":         28800
+  },
+  "storyPoints": 5,
   "childrenTotal": 1
 }
 ```
@@ -92,6 +98,8 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
 - `portfolio`: `null` when absent (field omitted — `omitempty`); `IssueSummary` object with `key`, `summary`, `status`, `statusCategory`. Populated when hierarchy is configured for the profile and the issue has a portfolio-level parent. Summary is fetched with one extra API call.
 - `comments.truncated`: `true` when `total > items.length` (controlled by `--comments N`).
 - `historyTruncated`: `true` only on the changelog fallback path (DC <8.7) when the server capped results.
+- `timetracking`: object with `originalEstimateSeconds`, `remainingEstimateSeconds`, `timeSpentSeconds` (all `int64`). Omitted (`omitempty`) when absent or all-zero. Fetched on every default `show` call — no extra API round-trip.
+- `storyPoints`: `float64` | absent. Story Points value from the instance-specific custom field. Omitted when the field is not configured (`jiracli setup` discovers it) or not set on the issue.
 - `activityTimeline[].type`: `"transition"` when the entry contains a `status` field change; `"update"` otherwise.
 - `activityTimeline[].changes[].fromCategory`/`toCategory`: populated for `status` field changes; empty string otherwise.
 - `children`: always present as an array (never `null`); empty `[]` when the issue has no children or `--no-children` is passed. Sub-tasks come from the issue response inline; Epic children are fetched via a separate search call.
@@ -121,7 +129,9 @@ One record per issue. Produced by `internal/jira.SearchIssueRecord` (`internal/j
   "updated":        "2026-06-20T14:30:00.000+0000",
   "labels":         ["backend"],
   "components":     ["Login"],
-  "fixVersions":    ["4.5.0"]
+  "fixVersions":    ["4.5.0"],
+  "timetracking":   { "originalEstimateSeconds": 144000, "remainingEstimateSeconds": 115200, "timeSpentSeconds": 28800 },
+  "storyPoints":    5
 }
 ```
 
@@ -138,6 +148,8 @@ The trailer is **omitted** when all results fit on the current page.
 - `updated`: raw Jira timestamp string (`"2006-01-02T15:04:05.000-0700"` format).
 - `labels`, `components`: empty array `[]` when absent.
 - `description`: string; omitted (`omitempty`) when empty. Populated when `--fields "description"` (or `--fields-only`) is passed.
+- `timetracking`: object with `originalEstimateSeconds`, `remainingEstimateSeconds`, `timeSpentSeconds`; omitted when absent or all-zero. Fetched in every default search (no extra flag required).
+- `storyPoints`: `float64` | absent. Omitted when the profile's Story Points field is not configured or the issue has no value.
 - `reporter`: `IssueUserRef` (`name`, `displayName`); omitted (`omitempty`) when the issue has no reporter or when `reporter` is not in the fetched field set.
 - `fixVersions`: string array; omitted (`omitempty`) when empty or not fetched.
 

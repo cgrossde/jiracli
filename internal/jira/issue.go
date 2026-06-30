@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultIssueFields is the lean field list fetched by default.
-const DefaultIssueFields = "key,summary,status,assignee,reporter,description,labels,components,priority,issuetype,created,updated,comment,fixVersions,parent,issuelinks,attachment,resolution"
+const DefaultIssueFields = "key,summary,status,assignee,reporter,description,labels,components,priority,issuetype,created,updated,comment,fixVersions,parent,issuelinks,attachment,resolution,timetracking"
 
 // IssueRaw is the raw Jira API response for a single issue.
 // RawFields holds the complete fields map as raw JSON so callers can
@@ -153,6 +153,11 @@ type IssueRaw struct {
 				Body    string `json:"body"`
 			} `json:"comments"`
 		} `json:"comment"`
+		TimeTracking *struct {
+			OriginalEstimateSeconds  int64 `json:"originalEstimateSeconds"`
+			RemainingEstimateSeconds int64 `json:"remainingEstimateSeconds"`
+			TimeSpentSeconds         int64 `json:"timeSpentSeconds"`
+		} `json:"timetracking"`
 	} `json:"fields"`
 	// RawFields is the complete "fields" object as a key→raw-JSON map.
 	// Used to read dynamic custom fields not captured by the typed Fields struct.
@@ -290,6 +295,13 @@ type ActivityRecord struct {
 	Changes []HistoryChangeRecord `json:"changes"`
 }
 
+// TimeTrackingRecord is the time-tracking sub-object in IssueRecord.
+// All fields are seconds; absent/zero values are omitted from JSON.
+type TimeTrackingRecord struct {
+	OriginalEstimateSeconds  int64 `json:"originalEstimateSeconds,omitempty"`
+	RemainingEstimateSeconds int64 `json:"remainingEstimateSeconds,omitempty"`
+	TimeSpentSeconds         int64 `json:"timeSpentSeconds,omitempty"`
+}
 
 // ChildIssueRecord is a compact child issue reference (subtask or epic child).
 type ChildIssueRecord struct {
@@ -303,33 +315,35 @@ type ChildIssueRecord struct {
 
 // IssueRecord is the NDJSON v1 schema for a single issue.
 type IssueRecord struct {
-	Key              string             `json:"key"`
-	Summary          string             `json:"summary"`
-	Status           string             `json:"status"`
-	StatusCategory   string             `json:"statusCategory"`
-	Resolution       *string            `json:"resolution"`
-	Priority         string             `json:"priority"`
-	IssueType        string             `json:"issueType"`
-	Assignee         *IssueUserRef      `json:"assignee"`
-	Reporter         *IssueUserRef      `json:"reporter"`
-	Created          string             `json:"created"`
-	Updated          string             `json:"updated"`
-	Description      string             `json:"description"`
-	Labels           []string           `json:"labels"`
-	Components       []string           `json:"components"`
-	FixVersions      []string           `json:"fixVersions"`
-	Parent           *IssueSummary      `json:"parent"`
-	Epic             *IssueSummary      `json:"epic"`
-	Portfolio        *IssueSummary      `json:"portfolio,omitempty"`
-	Links            []IssueLinkRecord  `json:"links"`
-	Attachments      []AttachmentRecord `json:"attachments"`
-	Comments         CommentsBlock      `json:"comments"`
-	HistoryTruncated bool               `json:"historyTruncated"`
-	HistoryTotal     int                `json:"historyTotal"`
-	ActivityTimeline []ActivityRecord   `json:"activityTimeline"`
-	Children         []ChildIssueRecord `json:"children"`
-	ChildrenTotal    int                `json:"childrenTotal"`
-	ChildrenError    string             `json:"childrenError,omitempty"`
+	Key              string              `json:"key"`
+	Summary          string              `json:"summary"`
+	Status           string              `json:"status"`
+	StatusCategory   string              `json:"statusCategory"`
+	Resolution       *string             `json:"resolution"`
+	Priority         string              `json:"priority"`
+	IssueType        string              `json:"issueType"`
+	Assignee         *IssueUserRef       `json:"assignee"`
+	Reporter         *IssueUserRef       `json:"reporter"`
+	Created          string              `json:"created"`
+	Updated          string              `json:"updated"`
+	Description      string              `json:"description"`
+	Labels           []string            `json:"labels"`
+	Components       []string            `json:"components"`
+	FixVersions      []string            `json:"fixVersions"`
+	Parent           *IssueSummary       `json:"parent"`
+	Epic             *IssueSummary       `json:"epic"`
+	Portfolio        *IssueSummary       `json:"portfolio,omitempty"`
+	Links            []IssueLinkRecord   `json:"links"`
+	Attachments      []AttachmentRecord  `json:"attachments"`
+	Comments         CommentsBlock       `json:"comments"`
+	HistoryTruncated bool                `json:"historyTruncated"`
+	HistoryTotal     int                 `json:"historyTotal"`
+	ActivityTimeline []ActivityRecord    `json:"activityTimeline"`
+	Children         []ChildIssueRecord  `json:"children"`
+	ChildrenTotal    int                 `json:"childrenTotal"`
+	ChildrenError    string              `json:"childrenError,omitempty"`
+	TimeTracking     *TimeTrackingRecord `json:"timetracking,omitempty"`
+	StoryPoints      *float64            `json:"storyPoints,omitempty"`
 }
 
 // HierarchyFieldIDs names the instance-specific custom field IDs used by
@@ -337,15 +351,16 @@ type IssueRecord struct {
 // Empty strings disable the corresponding read — caller-provided zero value
 // is valid and behaves as "no hierarchy info available".
 type HierarchyFieldIDs struct {
-	EpicLink   string
-	ParentLink string
-	Portfolio  string
+	EpicLink    string
+	ParentLink  string
+	Portfolio   string
+	StoryPoints string
 }
 
 // FieldList returns the field IDs in a stable order for use in the
 // /issue?fields= query string. Empty entries are skipped.
 func (h HierarchyFieldIDs) FieldList() []string {
-	out := make([]string, 0, 3)
+	out := make([]string, 0, 4)
 	if h.EpicLink != "" {
 		out = append(out, h.EpicLink)
 	}
@@ -354,6 +369,9 @@ func (h HierarchyFieldIDs) FieldList() []string {
 	}
 	if h.Portfolio != "" {
 		out = append(out, h.Portfolio)
+	}
+	if h.StoryPoints != "" {
+		out = append(out, h.StoryPoints)
 	}
 	return out
 }
@@ -600,6 +618,28 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 		})
 	}
 	rec.ChildrenTotal = len(rec.Children)
+
+	// Time tracking — present only when Jira returned the sub-object with non-zero data
+	if f.TimeTracking != nil {
+		o, r, s := f.TimeTracking.OriginalEstimateSeconds, f.TimeTracking.RemainingEstimateSeconds, f.TimeTracking.TimeSpentSeconds
+		if o != 0 || r != 0 || s != 0 {
+			rec.TimeTracking = &TimeTrackingRecord{
+				OriginalEstimateSeconds:  o,
+				RemainingEstimateSeconds: r,
+				TimeSpentSeconds:         s,
+			}
+		}
+	}
+
+	// Story Points — dynamic custom field, read via RawFields
+	if hf.StoryPoints != "" {
+		if spRaw, ok := raw.RawFields[hf.StoryPoints]; ok && len(spRaw) > 0 && string(spRaw) != "null" {
+			var n float64
+			if err := json.Unmarshal(spRaw, &n); err == nil {
+				rec.StoryPoints = &n
+			}
+		}
+	}
 
 	return rec
 }

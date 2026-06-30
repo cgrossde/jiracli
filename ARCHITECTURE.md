@@ -322,7 +322,7 @@ func run(args []string, stdout, stderr io.Writer) error { … }
 
 `cmd/` functions return `(string, error)` — raw output string and execution error. `main.go`'s `WrapWithPresenter` captures the output into a buffer, measures elapsed time, and calls `output.Format` before writing to `stdout`.
 
-When `--json` is set on the command, `WrapWithPresenter` bypasses `output.Format` entirely and writes the buffer verbatim — no footer, no overflow.
+When `--json` or `--keys-only` is set on the command, `WrapWithPresenter` bypasses `output.Format` entirely and writes the buffer verbatim — no footer, no overflow. Both flags produce machine-readable output that the footer would corrupt or pollute.
 
 ---
 

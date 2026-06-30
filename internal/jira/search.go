@@ -60,19 +60,21 @@ func (c *Client) Search(ctx context.Context, jql string, page, limit int, fields
 
 // SearchIssueRecord is the NDJSON shape for a single issue in a search result.
 type SearchIssueRecord struct {
-	Key            string        `json:"key"`
-	Summary        string        `json:"summary"`
-	Description    string        `json:"description,omitempty"`
-	Status         string        `json:"status"`
-	StatusCategory string        `json:"statusCategory"`
-	Assignee       *IssueUserRef `json:"assignee"`
-	Reporter       *IssueUserRef `json:"reporter,omitempty"`
-	Priority       string        `json:"priority"`
-	IssueType      string        `json:"issueType"`
-	Updated        string        `json:"updated"`
-	Labels         []string      `json:"labels"`
-	Components     []string      `json:"components"`
-	FixVersions    []string      `json:"fixVersions,omitempty"`
+	Key            string              `json:"key"`
+	Summary        string              `json:"summary"`
+	Description    string              `json:"description,omitempty"`
+	Status         string              `json:"status"`
+	StatusCategory string              `json:"statusCategory"`
+	Assignee       *IssueUserRef       `json:"assignee"`
+	Reporter       *IssueUserRef       `json:"reporter,omitempty"`
+	Priority       string              `json:"priority"`
+	IssueType      string              `json:"issueType"`
+	Updated        string              `json:"updated"`
+	Labels         []string            `json:"labels"`
+	Components     []string            `json:"components"`
+	FixVersions    []string            `json:"fixVersions,omitempty"`
+	TimeTracking   *TimeTrackingRecord `json:"timetracking,omitempty"`
+	StoryPoints    *float64            `json:"storyPoints,omitempty"`
 }
 
 // SearchPaginationTrailer is emitted as the final NDJSON line when more pages exist.
@@ -87,7 +89,8 @@ type SearchPaginationTrailer struct {
 }
 
 // ToSearchRecord maps an IssueRaw to a SearchIssueRecord.
-func ToSearchRecord(raw IssueRaw) SearchIssueRecord {
+// spField is the instance-specific Story Points custom field ID (empty = disabled).
+func ToSearchRecord(raw IssueRaw, spField string) SearchIssueRecord {
 	rec := SearchIssueRecord{
 		Key:            raw.Key,
 		Summary:        raw.Fields.Summary,
@@ -133,6 +136,28 @@ func ToSearchRecord(raw IssueRaw) SearchIssueRecord {
 	}
 	if len(fixVersions) > 0 {
 		rec.FixVersions = fixVersions
+	}
+
+	// Time tracking
+	if raw.Fields.TimeTracking != nil {
+		tt := raw.Fields.TimeTracking
+		if tt.OriginalEstimateSeconds != 0 || tt.RemainingEstimateSeconds != 0 || tt.TimeSpentSeconds != 0 {
+			rec.TimeTracking = &TimeTrackingRecord{
+				OriginalEstimateSeconds:  tt.OriginalEstimateSeconds,
+				RemainingEstimateSeconds: tt.RemainingEstimateSeconds,
+				TimeSpentSeconds:         tt.TimeSpentSeconds,
+			}
+		}
+	}
+
+	// Story Points — dynamic custom field
+	if spField != "" {
+		if spRaw, ok := raw.RawFields[spField]; ok && len(spRaw) > 0 && string(spRaw) != "null" {
+			var n float64
+			if err := json.Unmarshal(spRaw, &n); err == nil {
+				rec.StoryPoints = &n
+			}
+		}
 	}
 
 	return rec

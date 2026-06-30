@@ -11,6 +11,7 @@ import (
 type AssignedFlags struct {
 	Profile  string
 	JSON     bool
+	KeysOnly bool
 	Category string
 	Limit    int
 	Page     int
@@ -44,6 +45,7 @@ Non-Done issues are shown by default. Use --category to filter by status categor
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Maximum results per page (1-100)")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().StringVar(&flags.Category, "category", "", "Status category filter: todo, in-progress, done, all (default: non-Done)")
+	c.Flags().BoolVar(&flags.KeysOnly, "keys-only", false, "Print one issue key per line; ideal for piping into further commands")
 	return c
 }
 
@@ -55,10 +57,11 @@ func Assigned(ctx context.Context, flags AssignedFlags) (string, error) {
 		return "", err
 	}
 	return Search(ctx, SearchFlags{
-		Profile: flags.Profile,
-		JSON:    flags.JSON,
-		Limit:   flags.Limit,
-		Page:    flags.Page,
+		Profile:  flags.Profile,
+		JSON:     flags.JSON,
+		KeysOnly: flags.KeysOnly,
+		Limit:    flags.Limit,
+		Page:     flags.Page,
 		// ExcludeDone is false: JQL is pre-built with its own status clause.
 	}, jql)
 }

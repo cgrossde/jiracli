@@ -18,6 +18,7 @@ import (
 type SearchFlags struct {
 	Profile     string
 	JSON        bool
+	KeysOnly    bool
 	Limit       int
 	Page        int
 	ExcludeDone bool
@@ -31,7 +32,7 @@ type SearchFlags struct {
 // defaultSearchFields is the default field set requested from the Jira API.
 var defaultSearchFields = []string{
 	"key", "status", "issuetype", "priority", "assignee",
-	"updated", "summary", "labels", "components",
+	"updated", "summary", "labels", "components", "timetracking",
 }
 
 // updatedLayout is the Jira API date-time format for the updated field.
@@ -98,6 +99,7 @@ Fields reference (--fields / --fields-only):
 	c.Flags().BoolVar(&flags.Assigned, "assigned", false, "Show only issues assigned to me")
 	c.Flags().StringVar(&flags.Category, "category", "", "Status category filter: todo, in-progress, done, all")
 	c.Flags().StringVar(&flags.JQL, "jql", "", "Entire JQL query as one string — bypasses positional-arg joining; safe for queries with quoted literals like text ~ \"KSP\"")
+	c.Flags().BoolVar(&flags.KeysOnly, "keys-only", false, "Print one issue key per line; ideal for piping into further commands (e.g. xargs jiracli show)")
 	return c
 }
 
@@ -159,6 +161,15 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 		}
 	} else {
 		fields = resolveSearchFields(flags.Fields)
+		// Append Story Points custom field when configured and not already present.
+		if entry.Hierarchy.StoryPointsField != "" && !containsStr(fields, entry.Hierarchy.StoryPointsField) {
+			fields = append(fields, entry.Hierarchy.StoryPointsField)
+		}
+	}
+	// --keys-only needs only the key field; override whatever was resolved above
+	// to avoid fetching and deserialising unnecessary data from the Jira API.
+	if flags.KeysOnly {
+		fields = []string{"key"}
 	}
 
 	// Clamp page.
@@ -179,8 +190,11 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 		return "", fmt.Errorf("search: %w", err)
 	}
 
+	if flags.KeysOnly {
+		return renderKeysOnly(resp, page, limit, jql, flags)
+	}
 	if flags.JSON {
-		return renderSearchJSON(resp, page, limit)
+		return renderSearchJSON(resp, page, limit, entry.Hierarchy.StoryPointsField)
 	}
 	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags, fields)
 }
@@ -230,12 +244,31 @@ func removeStr(ss []string, s string) []string {
 	return out
 }
 
-// renderSearchJSON emits one NDJSON record per issue, then a pagination trailer
-// if more pages exist.
-func renderSearchJSON(resp jira.SearchResponse, page, limit int) (string, error) {
+// renderKeysOnly emits one issue key per line — no header, no footer prose.
+// Ideal for piping: jiracli search --keys-only ... | xargs -I{} jiracli show {}
+// When more pages exist, the last line is a comment hint (# next: <cmd>) so
+// scripts can detect and continue pagination.
+func renderKeysOnly(resp jira.SearchResponse, page, limit int, originalJQL string, flags SearchFlags) (string, error) {
 	var sb strings.Builder
 	for _, raw := range resp.Issues {
-		rec := jira.ToSearchRecord(raw)
+		sb.WriteString(raw.Key)
+		sb.WriteByte('\n')
+	}
+	returned := len(resp.Issues)
+	startAt := (page - 1) * limit
+	if resp.Total > startAt+returned {
+		nextCmd := buildNextPageCmd(originalJQL, page+1, limit, flags)
+		fmt.Fprintf(&sb, "# next: %s\n", nextCmd)
+	}
+	return sb.String(), nil
+}
+
+// renderSearchJSON emits one NDJSON record per issue, then a pagination trailer
+// if more pages exist.
+func renderSearchJSON(resp jira.SearchResponse, page, limit int, spField string) (string, error) {
+	var sb strings.Builder
+	for _, raw := range resp.Issues {
+		rec := jira.ToSearchRecord(raw, spField)
 		data, err := json.Marshal(rec)
 		if err != nil {
 			return "", fmt.Errorf("marshal search record: %w", err)
@@ -264,6 +297,7 @@ func renderSearchJSON(resp jira.SearchResponse, page, limit int) (string, error)
 	}
 	return sb.String(), nil
 }
+
 // ANSI constants — only what the local helpers below still need directly.
 // colorIssueType, colorStatusName, colorsEnabled, and stripAnsi have been
 // promoted to internal/jira; local helpers call them via the jira package.
@@ -572,7 +606,7 @@ func extractFieldValue(raw jira.IssueRaw, field string) string {
 	// Integer: Jira time fields are seconds — format as hours/minutes.
 	var n int64
 	if json.Unmarshal(v, &n) == nil {
-		return formatSeconds(n)
+		return jira.FormatSeconds(n)
 	}
 
 	// Plain string.
@@ -627,23 +661,6 @@ func extractFieldValue(raw jira.IssueRaw, field string) string {
 	return ""
 }
 
-// formatSeconds converts a Jira time-in-seconds value to a human-readable string.
-// Jira stores time in seconds; typical granularity is 1h = 3600s.
-func formatSeconds(secs int64) string {
-	if secs <= 0 {
-		return ""
-	}
-	h := secs / 3600
-	m := (secs % 3600) / 60
-	if h > 0 && m > 0 {
-		return fmt.Sprintf("%dh%dm", h, m)
-	}
-	if h > 0 {
-		return fmt.Sprintf("%dh", h)
-	}
-	return fmt.Sprintf("%dm", m)
-}
-
 const descPreviewLen = 100
 
 var (
@@ -653,7 +670,7 @@ var (
 	descFmtRe = regexp.MustCompile(`[*_+\-]([^*_+\-\n]+)[*_+\-]`)
 	// descStrayFmtRe strips bare unmatched opening markers (e.g. *Text with no closing *).
 	// RE2 has no lookbehind; captures (space|^) and first word char, drops the marker.
-	descStrayFmtRe = regexp.MustCompile(`(^|\s)[*_+](\S)`)
+	descStrayFmtRe   = regexp.MustCompile(`(^|\s)[*_+](\S)`)
 	descLineMarkerRe = regexp.MustCompile(`(?m)^\s*[*#+\-]+\s+`)
 	descLinkRe       = regexp.MustCompile(`\[([^\]|]+)\|[^\]]+\]|\[([^\]]+)\]`)
 	whitespaceRunRe  = regexp.MustCompile(`  +`)
@@ -722,11 +739,17 @@ func buildNextPageCmd(jql string, nextPage, limit int, flags SearchFlags) string
 	}
 	// Emit --jql when the original query came from that flag, or when the JQL
 	// contains characters (double-quotes, parens, ~) that are unsafe to pass as
-	// a bare positional argument.
-	if flags.JQL != "" || strings.ContainsAny(jql, `"~()`) {
-		parts = append(parts, fmt.Sprintf("--jql %q", jql))
-	} else {
-		parts = append(parts, fmt.Sprintf("%q", jql))
+	// a bare positional argument. Skip entirely when jql is empty (e.g. --assigned
+	// with no additional JQL — the search is fully determined by --assigned).
+	if jql != "" {
+		if flags.JQL != "" || strings.ContainsAny(jql, `"~()`) {
+			parts = append(parts, fmt.Sprintf("--jql %q", jql))
+		} else {
+			parts = append(parts, fmt.Sprintf("%q", jql))
+		}
+	}
+	if flags.KeysOnly {
+		parts = append(parts, "--keys-only")
 	}
 	return strings.Join(parts, " ")
 }

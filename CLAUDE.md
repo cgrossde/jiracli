@@ -21,14 +21,15 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `auth profile` | `[profile]`, `--clear`, `--list` | Get or set default profile |
 | `auth status` | `--profile`, `--json`, `--no-cache` | Show current authenticated user and credential status |
 | `config hierarchy` | `--profile`, `--json`, `--portfolio`, `--rediscover` | View or update hierarchy field IDs for the profile |
-| `show <ref>` | `--profile`, `--json`, `--no-history`, `--no-comments`, `--comments N`, `--fields`, `--fields-only`, `--no-children`, `--parent`, `-o` | Fetch and render one issue, or download attachment by compound ref (`-o` only used with `KEY:attach:ID` refs) |
-| `show assigned` | `--profile`, `--json`, `--category`, `--limit`, `--page` | Issues assigned to the current user |
+| `show <ref> [ref...]` | `--profile`, `--json`, `--no-history`, `--no-comments`, `--comments N`, `--fields`, `--fields-only`, `--no-children`, `--parent`, `-o` | Fetch and render one or more issues; pass `-` to read keys from stdin. Compound refs (`KEY:attach:ID`) single only. |
+| `show assigned` | `--profile`, `--json`, `--keys-only`, `--category`, `--limit`, `--page` | Issues assigned to the current user |
 | `show comments <KEY>` | `--profile`, `--json`, `--since`, `--limit`, `--page` | Issue comment thread |
 | `show history <KEY>` | `--profile`, `--json`, `--include-rank`, `--since`, `--limit`, `--page` | Changelog entries |
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
 | `show hierarchy <KEY>` | `--profile`, `--json`, `--all`, `--open`, `--status`, `--depth N`, `--flat`, `--since` | Walk Initiative → Epic → Subject → Children for an issue |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
-| `search [<jql...>]` | `--profile`, `--json`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category`, `--jql` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user; `--jql <query>` passes the entire JQL as one string (bypasses arg joining, safe for quoted literals like `text ~ "KSP"`) |
+|`show rollup <EPIC-KEY>`|`--profile`, `--json`, `--all`|Aggregate time + story-point estimates across an epic's children; shows Estimates, progress bar, SP totals, status breakdown table, and unestimated children list|
+| `search [<jql...>]` | `--profile`, `--json`, `--keys-only`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category`, `--jql` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user; `--jql <query>` passes the entire JQL as one string (bypasses arg joining, safe for quoted literals like `text ~ "KSP"`); `--keys-only` prints one key per line for piping |
 | `open <ref>` | `--profile`, `--print-url` | Open issue/comment/attachment in browser |
 | `lookup users` | `--profile`, `--project`, `--active`, `--limit`, `--json` | Search users |
 | `lookup labels` | `--profile`, `--project`, `--json` | Suggest labels |
@@ -42,13 +43,13 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `lookup fields` | `--profile`, `--custom`, `--id`, `--project`, `--type`, `--json` | List/inspect fields |
 | `cache list` | `--profile`, `--json` | Show cached entries with TTLs |
 | `cache clear` | `--profile`, `--key`, `--yes` | Purge cache entries (use `cache list` to see key names) |
-| `edit status <KEY> <name-or-id>` | `--profile`, `--comment`, `--yes` | Transition issue status |
-| `edit assignee <KEY> <user-or-id>` | `--profile`, `--yes` | Assign issue (`-` to unassign, `me` for self) |
-| `edit field <KEY> <spec...>` | `--profile`, `--allow-new`, `--yes` | Update arbitrary issue fields |
+| `edit status <KEY> [KEY...] <name-or-id>` | `--profile`, `--comment`, `--yes` | Transition one or more issues; last arg is always the transition name/id |
+| `edit assignee <KEY> [KEY...] <user-or-id>` | `--profile`, `--yes` | Assign one or more issues; last arg is always the user (`-` to unassign, `me` for self) |
+| `edit field <KEY> [KEY...] <spec...>` | `--profile`, `--allow-new`, `--yes` | Update arbitrary fields on one or more issues; leading args without `=` are keys, first arg with `=` starts specs |
 | `add comment <KEY> <body...>` | `--profile`, `--file`, `--yes` | Add comment (dry-run by default) |
 | `add link <source> <target>` | `--profile`, `--type`, `--yes` | Link two issues |
 | `add attachment <KEY> <file...>` | `--profile`, `--yes` | Upload attachments |
-| `delete <ref>` | `--profile`, `--yes`, `--with-subtasks` | Delete by ref shape: `KEY` = issue, `KEY:comment:ID` = comment, `KEY:attach:ID` = attachment, `KEY:link:ID` = link. `--with-subtasks` for issue deletes only. Aliased as `rm`. Dry-run by default. |
+| `delete <ref> [ref...]` | `--profile`, `--yes`, `--with-subtasks` | Delete issues (multi-key OK for plain keys), or single comment/attach/link by compound ref. Aliased as `rm`. Dry-run by default. |
 | `create` | `--profile`, `--init-draft`, `--from-draft`, `--project`, `--type`, `--summary`, `--description`, `--priority`, `--assignee`, `--component`, `--label`, `--fix-version`, `--custom`, `--allow-new`, `--no-cache`, `--yes` | Create issue |
 
 Full usage details: `docs/` directory.

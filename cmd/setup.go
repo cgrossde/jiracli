@@ -242,6 +242,13 @@ func NewSetupCmd(rawOut io.Writer, skillContent []byte) *cobra.Command {
 					}
 				}
 
+				if fid, _, err := hClient.ResolveFieldID(ctx, "Story Points", hStore, false); err == nil {
+					hc.StoryPointsField = fid
+					fmt.Fprintf(out, "✓ Story Points = %s\n", fid)
+				} else {
+					fmt.Fprintf(out, "  (Story Points field not found — Jira Software not installed?)\n")
+				}
+
 				hc.DiscoveredAt = time.Now().UTC()
 				entry.Hierarchy = hc
 				if err := keychain.Save(entry); err != nil {

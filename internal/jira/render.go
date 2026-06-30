@@ -368,3 +368,70 @@ func AbbreviateChange(field, from, to string, statusMarker string) string {
 	}
 	return fmt.Sprintf("%s: %s → %s%s", field, fromDisplay, toDisplay, statusMarker)
 }
+
+// FormatSeconds converts a Jira time-in-seconds value to a human-readable string.
+// Jira stores time in seconds; typical granularity is 1h = 3600s.
+// Returns "" when secs <= 0.
+func FormatSeconds(secs int64) string {
+	if secs <= 0 {
+		return ""
+	}
+	h := secs / 3600
+	m := (secs % 3600) / 60
+	if h > 0 && m > 0 {
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	if h > 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+// ProgressPercent returns floor(100*spent/planned). Returns 0 when planned <= 0.
+func ProgressPercent(spent, planned int64) int {
+	if planned <= 0 {
+		return 0
+	}
+	return int(math.Floor(float64(spent) / float64(planned) * 100))
+}
+
+// FormatProgressBar renders a width-cell unicode bar showing spent/planned ratio.
+// Over-budget coloring: green ≤99%, orange 100-119%, red ≥120%.
+// Returns ANSI-colored string when colorEnabled is true, plain otherwise.
+// Planned must be > 0; caller guards.
+func FormatProgressBar(spent, planned int64, width int, colorEnabled bool) string {
+	if width <= 0 {
+		width = 24
+	}
+	pct := ProgressPercent(spent, planned)
+
+	// Cap filled cells at width even when over-budget.
+	filled := int(math.Round(float64(pct) / 100.0 * float64(width)))
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	empty := width - filled
+
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
+
+	var color string
+	if colorEnabled {
+		switch {
+		case pct >= 120:
+			color = "\x1b[31m" // red
+		case pct >= 100:
+			color = "\x1b[38;5;208m" // orange
+		default:
+			color = "\x1b[97m" // bright white
+		}
+	}
+
+	suffix := fmt.Sprintf("· %d%% spent", pct)
+	if colorEnabled {
+		return color + "[" + bar + "]" + "\x1b[0m" + " " + suffix
+	}
+	return "[" + bar + "] " + suffix
+}

@@ -129,7 +129,7 @@ func TestWrapAt(t *testing.T) {
 }
 
 func TestAbbreviateChange(t *testing.T) {
-	longBody := strings.Repeat("x", 500) // 500 runes
+	longBody := strings.Repeat("x", 500)    // 500 runes
 	longComment := strings.Repeat("y", 200) // 200 runes — above 120 truncation limit
 
 	tests := []struct {
@@ -196,27 +196,27 @@ func TestAbbreviateChange(t *testing.T) {
 		},
 		// status — shown in full with regression marker
 		{
-			name:         "status with regression marker",
-			field:        "status", from: "In Progress", to: "To Do", statusMarker: " ↩",
-			want:         "status: In Progress → To Do ↩",
+			name:  "status with regression marker",
+			field: "status", from: "In Progress", to: "To Do", statusMarker: " ↩",
+			want: "status: In Progress → To Do ↩",
 		},
 		// assignee — shown in full even if long
 		{
 			name:  "assignee full even if long",
 			field: "assignee", from: longBody, to: longBody,
-			want:  "assignee: " + longBody + " → " + longBody,
+			want: "assignee: " + longBody + " → " + longBody,
 		},
 		// normal short field
 		{
 			name:  "fixVersion shown in full",
 			field: "Fix Version", from: "2026.05", to: "2026.06",
-			want:  "Fix Version: 2026.05 → 2026.06",
+			want: "Fix Version: 2026.05 → 2026.06",
 		},
 		// from-empty normal field
 		{
 			name:  "label set (from empty)",
 			field: "labels", from: "", to: "mobile",
-			want:  "labels: → mobile",
+			want: "labels: → mobile",
 		},
 	}
 
@@ -227,5 +227,92 @@ func TestAbbreviateChange(t *testing.T) {
 				t.Errorf("\ngot:  %q\nwant: %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFormatSeconds(t *testing.T) {
+	tests := []struct {
+		secs int64
+		want string
+	}{
+		{0, ""},
+		{-1, ""},
+		{60, "1m"},
+		{3600, "1h"},
+		{3660, "1h1m"},
+		{7200, "2h"},
+		{7320, "2h2m"},
+		{144000, "40h"}, // 40h exactly
+		{57600, "16h"},  // 16h
+	}
+	for _, tc := range tests {
+		got := FormatSeconds(tc.secs)
+		if got != tc.want {
+			t.Errorf("FormatSeconds(%d) = %q, want %q", tc.secs, got, tc.want)
+		}
+	}
+}
+
+func TestProgressPercent(t *testing.T) {
+	tests := []struct {
+		spent, planned int64
+		want           int
+	}{
+		{0, 0, 0},
+		{0, 3600, 0},
+		{1800, 3600, 50},
+		{3600, 3600, 100},
+		{4320, 3600, 120},
+		{7200, 3600, 200},
+		{0, 0, 0}, // zero denominator (repeat validates guard)
+	}
+	for _, tc := range tests {
+		got := ProgressPercent(tc.spent, tc.planned)
+		if got != tc.want {
+			t.Errorf("ProgressPercent(%d, %d) = %d, want %d", tc.spent, tc.planned, got, tc.want)
+		}
+	}
+}
+
+func TestFormatProgressBar(t *testing.T) {
+	// No color — deterministic string comparison.
+	tests := []struct {
+		spent, planned int64
+		wantPct        int
+		wantContains   string
+	}{
+		{0, 3600, 0, "0% spent"},
+		{1800, 3600, 50, "50% spent"},
+		{3600, 3600, 100, "100% spent"},
+		{4320, 3600, 120, "120% spent"},
+		{7200, 3600, 200, "200% spent"},
+	}
+	for _, tc := range tests {
+		bar := FormatProgressBar(tc.spent, tc.planned, 24, false)
+		if !strings.Contains(bar, tc.wantContains) {
+			t.Errorf("FormatProgressBar no-color: got %q, want substring %q", bar, tc.wantContains)
+		}
+		// With color: bar must contain the percent and start with '['
+		colored := FormatProgressBar(tc.spent, tc.planned, 24, true)
+		if !strings.Contains(colored, tc.wantContains) {
+			t.Errorf("FormatProgressBar colored: got %q, want substring %q", colored, tc.wantContains)
+		}
+	}
+
+	// Color thresholds — verify ANSI codes are present at the right thresholds.
+	// Under 100% → bright white (\x1b[97m)
+	barUnder := FormatProgressBar(1800, 3600, 24, true)
+	if !strings.Contains(barUnder, "\x1b[97m") {
+		t.Errorf("under-budget bar should contain bright-white code, got %q", barUnder)
+	}
+	// 100-119% → orange (\x1b[38;5;208m)
+	barOrange := FormatProgressBar(3960, 3600, 24, true) // 110%
+	if !strings.Contains(barOrange, "\x1b[38;5;208m") {
+		t.Errorf("orange-budget bar should contain orange code, got %q", barOrange)
+	}
+	// >= 120% → red (\x1b[31m)
+	barRed := FormatProgressBar(4500, 3600, 24, true) // 125%
+	if !strings.Contains(barRed, "\x1b[31m") {
+		t.Errorf("red-budget bar should contain red code, got %q", barRed)
 	}
 }
