@@ -283,6 +283,7 @@ jiracli/
 │   ├── field.go               edit field <KEY> <spec…>
 │   │
 │   ├── create.go              create issue
+│   ├── rollup.go              show rollup <KEY>: aggregate time + SP across hierarchy levels (--depth, --list, --all)
 │   ├── credentials.go         resolveEntry / resolveEntryAndStore — shared credential helpers
 │   ├── lookup.go              lookup command group root + suggestLabels helper
 │   ├── lookup_users.go        lookup users
@@ -397,10 +398,11 @@ Layer 2 presentation.
 | `links.go` | CreateLink, DeleteLink (via `DELETE /issueLink/:id`), AggregateLabelsByProject |
 | `create.go` | CreateIssue |
 | `preview.go` | Preview, ValidationRow, Render, Execute — supports `Method: "DELETE"` (body block suppressed when nil) |
-| `render.go` | FormatRelative, WrapAt, FormatBytes, TruncateString, ColWidth, PadRight, IsASCIILetter, RenderWikiMarkup, AbbreviateChange, StatusCategoryRank |
+| `render.go` | FormatRelative, WrapAt, FormatBytes, TruncateString, ColWidth, PadRight, IsASCIILetter, RenderWikiMarkup, AbbreviateChange, StatusCategoryRank, CommonRunePrefix, TruncateMidPrefix |
 | `badges.go` | `ColorsEnabled`, `StripAnsi`, `ColorIssueType`, `ColorStatusName`, `Bold`, `Dim` — ANSI badge helpers used by renderers and `internal/output` |
 | `hierarchy.go` | `HierarchyNode`, `HierarchyChain` (incl. `DescendantsTruncated`), `BuildHierarchy` (depth + since params), `fetchChildrenForParents`, `strategyForLevel`, `parentKeyForChild` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink), batched multi-level children fetch, 400 batch-halving retry |
 | `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer with recursive subtree (depth ≥ 2), `renderChildSubtree`; `RenderHierarchyFlat` — tab-separated flat output with DFS order and negative-depth ancestors |
+| `rollup.go` | `RollupRow`, `RollupNode`, `RollupTree`, `ChildJQL`, `AggregateNodes`, `RollupNodeFromRaw`, `SubjectRowFromRaw`, `IssueTypeHasEpicLinkChildren` — hierarchy time/SP rollup types and aggregation helpers |
 
 ### HTTP error handling
 

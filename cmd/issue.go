@@ -701,6 +701,9 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	fmt.Fprintf(&sb, "  → jiracli show history      %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show transitions  %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show hierarchy    %s\n", rec.Key)
+	if strings.EqualFold(rec.IssueType, "Epic") {
+		fmt.Fprintf(&sb, "  → jiracli show rollup       %s\n", rec.Key)
+	}
 
 	return sb.String()
 }

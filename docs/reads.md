@@ -681,79 +681,124 @@ In JSON mode, `"descendantsTruncated": true` is set on the root object.
 
 ---
 
-## `rollup <EPIC-KEY>`
+## `rollup <KEY>`
 
-Aggregates time estimates and Story Points across all children of an Epic. Produces totals, a status-category breakdown table, a progress bar, and a list of unestimated children.
+Aggregates time estimates and Story Points across a hierarchy. Works on any issue type — Initiatives, Epics, Stories, Tasks, etc. Shows the subject's own time tracking alongside aggregated children, in a side-by-side table.
 
-    jiracli show rollup <EPIC-KEY> [flags]
+    jiracli show rollup <KEY> [flags]
 
-Requires the profile to have hierarchy fields configured (`jiracli setup --reconfigure` or `jiracli config hierarchy --rediscover`). Story Points are included automatically when `storyPointsField` is set in the profile.
+Requires hierarchy fields to be configured (`jiracli setup --reconfigure` or `jiracli config hierarchy --rediscover`). Story Points are included automatically when `storyPointsField` is set in the profile. If hierarchy fields are missing, an error is printed: `hierarchy fields not configured for profile "X" — run: jiracli config hierarchy --rediscover`.
 
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--json` | false | Output as a single JSON object |
+| `--depth N` | 1 | Depth to aggregate. 1 = direct children only; 2 = children + grandchildren. Capped at 2. |
+| `--list` | false | Print a per-child breakdown table beneath the summary |
 | `--all` | false | Page through all children (bypasses 100-result default cap) |
+| `--json` | false | Output as a single JSON object |
 | `--profile <name>` | default | Credential profile |
 
 ### Plain-text output shape
 
 ```
 [Epic]  ACME-100  In Progress · 2 - High
-[Login] Fix login page timeout
-Fix Versions: 4.5.0   Children: 8
+Fix login page timeout
 
-Estimates: Planned 96h · Remaining 80h · Spent 16h
-[████░░░░░░░░░░░░░░░░░░░░] · 16% spent
-Story Points: 22 SP (5 of 8 children pointed)
+                                         Planned   Remaining       Spent          SP
+──────────────────────────────────────────────────────────────────────────────────────
+Epic ACME-100 (own)                         240h         58h        240h           —
+Level 1 — 8 Storys                           96h         80h         16h    22 (5/8)
+──────────────────────────────────────────────────────────────────────────────────────
+Total                                       336h        138h        256h          22
 
-Breakdown by status:
-  Status          Children   Planned  Remaining    Logged    SP
-  ────────────────────────────────────────────────────────────
-  To Do                  3         —         —         —    10
-  In Progress            3       96h       80h       16h    12
-  Done                   2         —         —         —     —
-  ────────────────────────────────────────────────────────────
-  Total                  8       96h       80h       16h    22
+[██████████████████░░░░░░] · 76% spent
 
-Unestimated children (5 of 8):
-  [Story]  ACME-206    Open            Dark mode toggle
-  [Story]  ACME-204    Open            Reproduce login timeout on mobile…
-  ...
-
-→ jiracli search "\"Epic Link\" = ACME-100 AND originalEstimate is EMPTY"
+  → pass --depth 2 to also aggregate grandchildren
 
 [exit:0 | Xms]
 ```
 
+With `--depth 2` on an Initiative:
+
+```
+[Initiative]  PROJ-50  In Progress · —
+Modernise authentication platform
+
+                                         Planned   Remaining       Spent          SP
+──────────────────────────────────────────────────────────────────────────────────────
+Initiative PROJ-50 (own)                       —           —           —           —
+Level 1 — 2 Epics                              —           —           —           —
+Level 2 — 14 Tasks                          192h        192h           —  19 (12/14)
+──────────────────────────────────────────────────────────────────────────────────────
+Total (all levels)                          192h        192h           —          19
+
+[░░░░░░░░░░░░░░░░░░░░░░░░] · 0% spent
+
+  (depth 2 is the maximum — run show rollup on individual children to go deeper)
+
+[exit:0 | Xms]
+```
+
+SP cell: `22 (5/8)` when only 5 of 8 children have Story Points set. Plain `22` when all are pointed. `—` when none.
+
 Progress bar color: white ≤99% spent, orange 100–119%, red ≥120%.
 
-### JSON output shape
+### `--list` per-child breakdown table
+
+Appended beneath the summary. When multiple children share a long common prefix, the summary column uses middle-elision (`prefix…unique-tail`) so the distinguishing tail is always visible. A `▸` suffix marks children that have their own sub-children.
+
+```
+Children:
+  Key             Summary                                                  Planned   Remaining       Spent          SP
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ACME-101        Fix login page timeout ▸                                     16h          8h          8h           2
+  ACME-102        Add dark mode toggle                                            —           —           —           5
+  ACME-103        Implement shared-prefix titl…erent unique ending here ▸         —           —           —           —
+```
+
+### JSON output shape (`--json`)
+
+Single JSON object:
 
 ```json
 {
-  "epicKey":       "ACME-100",
-  "total":         { "category": "Total", "children": 8, "originalEstimateSeconds": 345600, "remainingEstimateSeconds": 288000, "timeSpentSeconds": 57600, "storyPoints": 22, "estimatedChildren": 3, "pointedChildren": 5 },
-  "buckets":       [ { "category": "To Do", ... }, { "category": "In Progress", ... }, { "category": "Done", ... } ],
-  "unestimated":   [ { "key": "ACME-206", "summary": "...", "status": "Open", ... } ],
-  "truncated":     false,
-  "totalChildren": 8
+  "subjectKey": "ACME-100",
+  "subjectIssueType": "Epic",
+  "subjectSummary": "Fix login page timeout",
+  "subject": {
+    "label": "Epic ACME-100 (own)",
+    "originalEstimateSeconds": 864000,
+    "remainingEstimateSeconds": 208800,
+    "timeSpentSeconds": 864000,
+    "storyPoints": 0,
+    "pointedCount": 0,
+    "totalCount": 1
+  },
+  "rows": [
+    {
+      "label": "Level 1 — 8 Storys",
+      "originalEstimateSeconds": 345600,
+      "remainingEstimateSeconds": 288000,
+      "timeSpentSeconds": 57600,
+      "storyPoints": 22,
+      "pointedCount": 5,
+      "totalCount": 8,
+      "issueTypeCounts": { "Story": 8 }
+    }
+  ],
+  "nodes": null,
+  "hasDeeperLevel": true,
+  "maxFetchedDepth": 1
 }
 ```
 
-`truncated` is `true` when `--all` was not passed and the epic has more than 100 children.
-
-### Notes
-
-- Rollup aggregates children's time estimates only (not the Epic's own `timetracking` field). "Estimated" means `originalEstimate > 0`; SP-only children count as unestimated for the time bar.
-- When `--all` is not set and the Epic has > 100 children, a footer warns `(showing N of M children — pass --all to walk every child)`.
-- Unestimated list: max 15 shown; `…and N more` appended when there are more.
+`nodes` is `null` unless `--list` is passed; when populated each node includes `hasChildren: true/false`. `rows` has one entry at `--depth 1`, two at `--depth 2`. `issueTypeCounts` maps issue type name → count within that level; omitted when empty. `hasDeeperLevel` is `true` when any L1 child has its own children.
 
 ### Errors
 
-- Subject is not an Epic: `[stderr] rollup only operates on Epics — PROJ-123 is a Story. For subtask rollup, use jiracli show PROJ-123`, exit 1.
-- No children: `Epic PROJ-123 has no children — nothing to roll up.`, exit 0.
+- Hierarchy not configured: `[stderr] hierarchy fields not configured for profile "X" — run: jiracli config hierarchy --rediscover`, exit 1.
+- No children: `KEY has no children — nothing to roll up.`, exit 0.
 - Invalid ref: `[stderr] show rollup requires a plain issue key — got "<input>"`, exit 1.
 
 ---

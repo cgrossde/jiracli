@@ -316,3 +316,123 @@ func TestFormatProgressBar(t *testing.T) {
 		t.Errorf("red-budget bar should contain red code, got %q", barRed)
 	}
 }
+// ── CommonRunePrefix ─────────────────────────────────────────────────────────
+
+func TestCommonRunePrefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		strs  []string
+		wantN int
+	}{
+		{"nil slice", nil, 0},
+		{"empty slice", []string{}, 0},
+		{"all empty strings", []string{"", "", ""}, 0},
+		{"one string", []string{"hello"}, 5},
+		{"identical strings", []string{"hello", "hello"}, 5},
+		{"no common prefix", []string{"alpha", "beta"}, 0},
+		{"common prefix 4", []string{"Widget (Dashboard): A", "Widget (Dashboard): B"}, 20},
+		{"common prefix stops at divergence", []string{"abc", "abx", "aby"}, 2},
+		{"unicode", []string{"日本語テスト", "日本語"}, 3},
+		{"one empty ignored", []string{"", "hello", "help"}, 3},
+		{"all empty except one", []string{"", "", "test"}, 4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CommonRunePrefix(tc.strs)
+			if got != tc.wantN {
+				t.Errorf("CommonRunePrefix(%v) = %d, want %d", tc.strs, got, tc.wantN)
+			}
+		})
+	}
+}
+
+// ── TruncateMidPrefix ────────────────────────────────────────────────────────
+
+func TestTruncateMidPrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		s           string
+		width       int
+		prefixKeep  int
+		want        string
+	}{
+		{
+			name:       "fits in width — no elision",
+			s:          "short",
+			width:      20,
+			prefixKeep: 5,
+			want:       "short",
+		},
+		{
+			name:       "basic mid-elide",
+			// tailWidth = 20-10-1 = 9; last 9 of "...understand B" = "erstand B"
+			s:          "Widget (Dashboard): Help users understand B",
+			width:      20,
+			prefixKeep: 10,
+			want:       "Widget (Da…erstand B",
+		},
+		{
+			name:       "tail fills remaining space",
+			// tailWidth = 15-5-1 = 9; last 9 of "Hello beautiful world wide" = "orld wide"
+			s:          "Hello beautiful world wide",
+			width:      15,
+			prefixKeep: 5,
+			want:       "Hello…orld wide",
+		},
+		{
+			name:       "prefixKeep >= width-1 → fallback to right-truncate",
+			s:          "Hello beautiful world wide",
+			width:      10,
+			prefixKeep: 10, // no room for tail
+			want:       "Hello beau…",
+		},
+		{
+			name:       "unicode prefix and tail preserved",
+			// tailWidth = 8-3-1 = 4; last 4 of "1234567890" = "7890"
+			s:          "日本語テスト追記1234567890",
+			width:      8,
+			prefixKeep: 3,
+			want:       "日本語…7890",
+		},
+		{
+			name:       "exact fit with no truncation needed",
+			s:          "12345",
+			width:      5,
+			prefixKeep: 2,
+			want:       "12345",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := TruncateMidPrefix(tc.s, tc.width, tc.prefixKeep)
+			if got != tc.want {
+				t.Errorf("TruncateMidPrefix(%q, %d, %d):\ngot:  %q\nwant: %q",
+					tc.s, tc.width, tc.prefixKeep, got, tc.want)
+			}
+		})
+	}
+}
+
+// ── Integration: mid-elide activates when prefix > width/2 ──────────────────
+
+func TestTruncateMidPrefix_ShowsTail(t *testing.T) {
+	// Items sharing a long common prefix — the unique suffix must remain visible.
+	const colW = 52
+	strs := []string{
+		"Widget (Dashboard Patterns): Help users understand the proposed activity A",
+		"Widget (Dashboard Patterns): Help users understand the proposed activity B",
+	}
+	pfx := CommonRunePrefix(strs)
+	if pfx <= colW/2 {
+		t.Fatalf("expected long common prefix, got %d", pfx)
+	}
+
+	for _, s := range strs {
+		out := TruncateMidPrefix(s, colW, 10)
+		// The last char of each string ('A' or 'B') must be visible.
+		last := string([]rune(s)[len([]rune(s))-1])
+		if !strings.HasSuffix(out, last) {
+			t.Errorf("unique suffix not visible: got %q, want suffix %q", out, last)
+		}
+	}
+}

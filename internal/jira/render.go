@@ -79,6 +79,57 @@ func TruncateString(s string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "…"
 }
 
+// CommonRunePrefix returns the length in runes of the longest common prefix
+// shared by all strings in strs. Empty strings are ignored; returns 0 when
+// strs is empty or contains only empty strings.
+func CommonRunePrefix(strs []string) int {
+	var base []rune
+	for _, s := range strs {
+		if s == "" {
+			continue
+		}
+		r := []rune(s)
+		if base == nil {
+			base = r
+			continue
+		}
+		n := len(r)
+		if len(base) < n {
+			n = len(base)
+		}
+		i := 0
+		for i < n && base[i] == r[i] {
+			i++
+		}
+		base = base[:i]
+	}
+	return len(base)
+}
+
+// TruncateMidPrefix truncates s to width runes using middle-elision.
+// The first prefixKeep runes are always shown, then "…", then as much of the
+// tail of s as fits in the remaining width. This surfaces the unique suffix
+// of strings that all share a long common prefix.
+//
+// Falls back to TruncateString (right-truncate) when:
+//   - s fits in width already
+//   - prefixKeep ≥ width-1 (no room for any tail)
+//   - the string is too short to have a meaningful tail
+func TruncateMidPrefix(s string, width, prefixKeep int) string {
+	r := []rune(s)
+	if len(r) <= width {
+		return s // fits, no elision needed
+	}
+	// tailWidth = width - prefixKeep - 1 (for the "…")
+	tailWidth := width - prefixKeep - 1
+	if tailWidth <= 0 {
+		// No room for a tail; fall back to right-truncate.
+		return TruncateString(s, width)
+	}
+	tail := string(r[len(r)-tailWidth:])
+	return string(r[:prefixKeep]) + "…" + tail
+}
+
 // FormatBytes renders a byte count as a human-readable string: "142 KB", "9 KB", "1.2 MB".
 func FormatBytes(n int64) string {
 	switch {

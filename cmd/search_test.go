@@ -247,7 +247,7 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 	// Case 1: no description in fields — no preview lines.
 	t.Run("no description field — no preview", func(t *testing.T) {
 		fields := defaultSearchFieldsCopy()
-		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields)
+		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -260,7 +260,7 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 	// Case 2: description in fields — preview on issue 1, not issue 2 (empty desc).
 	t.Run("description in fields — preview on issue with description only", func(t *testing.T) {
 		fields := append(defaultSearchFieldsCopy(), "description")
-		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields)
+		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -277,7 +277,7 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 	// Case 3: description,reporter,fixVersions added — description preview AND extra-fields line rendered.
 	t.Run("multi-add: description preview + extra fields line rendered", func(t *testing.T) {
 		fields := append(defaultSearchFieldsCopy(), "description", "reporter", "fixVersions")
-		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields)
+		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "")
 		if err != nil {
 			t.Fatal(err)
 		}

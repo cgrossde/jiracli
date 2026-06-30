@@ -28,7 +28,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
 | `show hierarchy <KEY>` | `--profile`, `--json`, `--all`, `--open`, `--status`, `--depth N`, `--flat`, `--since` | Walk Initiative → Epic → Subject → Children for an issue |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
-|`show rollup <EPIC-KEY>`|`--profile`, `--json`, `--all`|Aggregate time + story-point estimates across an epic's children; shows Estimates, progress bar, SP totals, status breakdown table, and unestimated children list|
+|`show rollup <KEY>`|`--profile`, `--json`, `--all`, `--depth N`, `--list`|Aggregate time + story-point estimates across any issue's hierarchy. Works on any issue type (Initiative, Epic, Story, etc.). Side-by-side table: subject own vs Level 1 children; `--depth 2` adds Level 2 grandchildren. `--list` prints per-child breakdown. Requires hierarchy fields configured.|
 | `search [<jql...>]` | `--profile`, `--json`, `--keys-only`, `--exclude-done`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--category`, `--jql` | Search issues; all issues returned by default including Done; `--exclude-done` hides Done; `--category` filters by status category (todo, in-progress, done, all); `--assigned` restricts to current user; `--jql <query>` passes the entire JQL as one string (bypasses arg joining, safe for quoted literals like `text ~ "KSP"`); `--keys-only` prints one key per line for piping |
 | `open <ref>` | `--profile`, `--print-url` | Open issue/comment/attachment in browser |
 | `lookup users` | `--profile`, `--project`, `--active`, `--limit`, `--json` | Search users |

@@ -352,3 +352,89 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 - Node `children` (recursive): present only when `--depth N` is ≥ 2. `omitempty` — absent on nodes whose children were not fetched or are empty. A depth-1 invocation never emits this field.
 - `descendantsTruncated`: `false` when all descendants were fully fetched; `true` when any level-2+ batch hit the 100-result cap without `--all`. Omitted (`omitempty`) when `false`.
 - `--flat --json` mode: emits NDJSON flat — one object per node with fields `key`, `depth` (int, ancestors negative), `parentKey` (omitted for the subject), `issueType`, `status`, `assignee` (omitted when unset), `summary`, `isSubject` (omitted unless true). No `HierarchyChain` wrapper — every node is its own line. `descendantsTruncated` is not emitted in flat mode.
+
+---
+
+## rollup
+
+Command: `jiracli show rollup <KEY> [--json] [--depth N] [--list]`
+
+One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jira/rollup.go`).
+
+```json
+{
+  "subjectKey":       "ACME-100",
+  "subjectIssueType": "Epic",
+  "subjectSummary":   "Fix login page timeout",
+  "subject": {
+    "label":                   "Epic ACME-100 (own)",
+    "originalEstimateSeconds": 864000,
+    "remainingEstimateSeconds": 208800,
+    "timeSpentSeconds":         864000,
+    "storyPoints":              0,
+    "pointedCount":             0,
+    "totalCount":               1,
+    "issueTypeCounts":          null
+  },
+  "rows": [
+    {
+      "label":                   "Level 1 — 8 Storys",
+      "originalEstimateSeconds": 345600,
+      "remainingEstimateSeconds": 288000,
+      "timeSpentSeconds":         57600,
+      "storyPoints":              22,
+      "pointedCount":             5,
+      "totalCount":               8,
+      "issueTypeCounts":          { "Story": 8 }
+    }
+  ],
+  "nodes": null,
+  "hasDeeperLevel":  true,
+  "maxFetchedDepth": 1
+}
+```
+
+**`RollupRow` fields (`subject` and each entry in `rows`):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `label` | string | Human-readable row label, e.g. `"Level 1 — 8 Storys"` |
+| `originalEstimateSeconds` | int64 | Planned time in seconds |
+| `remainingEstimateSeconds` | int64 | Remaining time in seconds |
+| `timeSpentSeconds` | int64 | Time logged in seconds |
+| `storyPoints` | float64 | Sum of Story Points for this level |
+| `pointedCount` | int | Items in this level that have SP set |
+| `totalCount` | int | Total item count in this level |
+| `truncated` | bool | `true` when the fetch was capped and more items exist; omitted (`omitempty`) when false |
+| `issueTypeCounts` | map[string]int | Count per issue type, e.g. `{"Story":5,"Bug":3}`; omitted when empty |
+
+**`RollupNode` fields (each entry in `nodes`, populated only with `--list`):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `key` | string | Issue key |
+| `summary` | string | Issue summary |
+| `status` | string | Status name |
+| `statusCategory` | string | `"To Do"`, `"In Progress"`, or `"Done"` |
+| `issueType` | string | Issue type name |
+| `originalEstimateSeconds` | int64 | Planned time |
+| `remainingEstimateSeconds` | int64 | Remaining time |
+| `timeSpentSeconds` | int64 | Logged time |
+| `storyPoints` | float64 | Story Points; omitted (`omitempty`) when not set |
+| `childrenTotal` | int | Server-reported count of this node's children; 0 when none |
+| `hasChildren` | bool | `true` when `childrenTotal > 0`; convenience field |
+
+**`RollupTree` top-level fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `subjectKey` | string | The queried issue key |
+| `subjectIssueType` | string | Issue type of the subject |
+| `subjectSummary` | string | Summary of the subject |
+| `subject` | `RollupRow` | The subject's own time tracking and SP |
+| `rows` | `[]RollupRow` | Level aggregates: one row at `--depth 1`; two rows at `--depth 2` |
+| `nodes` | `[]RollupNode` | Per-child breakdown; `null` unless `--list` is passed |
+| `hasDeeperLevel` | bool | `true` when any L1 child has its own children |
+| `maxFetchedDepth` | int | Highest depth actually fetched (1 or 2) |
+
+No pagination trailer (single-object response).

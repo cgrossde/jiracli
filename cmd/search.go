@@ -196,7 +196,7 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 	if flags.JSON {
 		return renderSearchJSON(resp, page, limit, entry.Hierarchy.StoryPointsField)
 	}
-	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags, fields)
+	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags, fields, entry.Hierarchy.StoryPointsField)
 }
 
 // resolveSearchFields applies +add / -drop semantics to defaultSearchFields.
@@ -421,7 +421,7 @@ func sectionLabel(s string) string {
 // renderSearchPlain renders human-readable search output.
 // The drill-down hint is shown once before the list (first item) and once in
 // the footer (last item) so an LLM sees it whether it reads the head or tail.
-func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL string, page, limit int, flags SearchFlags, fields []string) (string, error) {
+func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL string, page, limit int, flags SearchFlags, fields []string, spField string) (string, error) {
 	var sb strings.Builder
 	pages := totalPages(resp.Total, limit)
 	if pages == 0 {
@@ -440,10 +440,11 @@ func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL strin
 	sb.WriteByte('\n')
 
 	now := time.Now()
-	// Extra fields: requested fields beyond the default set (excluding "description" which has its own line).
+	// Extra fields: fields beyond the default set, excluding description (has its own line)
+	// and the SP custom field (surfaced in --json only, not as a plain column).
 	var extraFields []string
 	for _, f := range fields {
-		if !containsStr(defaultSearchFields, f) && f != "description" {
+		if !containsStr(defaultSearchFields, f) && f != "description" && (spField == "" || f != spField) {
 			extraFields = append(extraFields, f)
 		}
 	}
