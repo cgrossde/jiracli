@@ -17,7 +17,7 @@ import (
 func RenderHierarchy(chain HierarchyChain, colorEnabled bool, statusFilter string) string {
 	var sb strings.Builder
 
-	if len(chain.Ancestors) == 0 && len(chain.Children) == 0 {
+	if len(chain.Ancestors) == 0 && len(chain.Children) == 0 && len(chain.Siblings) == 0 {
 		writeSubjectRow(&sb, chain.Subject, colorEnabled)
 		sb.WriteString("(standalone issue — no parent or children)\n")
 		return sb.String()
@@ -28,7 +28,79 @@ func RenderHierarchy(chain HierarchyChain, colorEnabled bool, statusFilter strin
 		writeAncestorRow(&sb, anc, colorEnabled)
 	}
 
-	// Subject row.
+	// When siblings are present, render them as a unified block where the subject
+	// is marked with ▶ and its children expand inline below it.
+	if len(chain.Siblings) > 0 {
+		visible := filterChildren(chain.Siblings, statusFilter)
+		truncated := chain.SiblingsTruncated && statusFilter == ""
+		hiddenSibs := len(chain.Siblings) - len(visible)
+		var hiddenDeeper int
+		for i := range visible {
+			sib := visible[i]
+			isLast := i == len(visible)-1 && !truncated
+			connector := "├─"
+			if isLast {
+				connector = "└─"
+			}
+			nextPrefix := "│  "
+			if isLast {
+				nextPrefix = "   "
+			}
+			if sib.IsSubject {
+				// Write subject row inline as a sibling entry with ▶.
+				writeSiblingSubjectRow(&sb, sib, connector, "  ", colorEnabled)
+				// Expand subject's own children indented under it.
+				if chain.ChildrenError != "" {
+					fmt.Fprintf(&sb, "  %s  (could not fetch children — %s)\n", nextPrefix, chain.ChildrenError)
+				} else if len(chain.Children) > 0 {
+					sortedKids := make([]HierarchyNode, len(chain.Children))
+					copy(sortedKids, chain.Children)
+					sort.SliceStable(sortedKids, func(a, b int) bool {
+						aDone := strings.EqualFold(sortedKids[a].StatusCategory, "Done")
+						bDone := strings.EqualFold(sortedKids[b].StatusCategory, "Done")
+						return !aDone && bDone
+					})
+					visKids := filterChildren(sortedKids, statusFilter)
+					childTruncated := chain.ChildrenTruncated && statusFilter == ""
+					for j := range visKids {
+						kidLast := j == len(visKids)-1 && !childTruncated
+						kidConnector := "├─"
+						if kidLast {
+							kidConnector = "└─"
+						}
+						kidNextPrefix := nextPrefix + "│  "
+						if kidLast {
+							kidNextPrefix = nextPrefix + "   "
+						}
+						writeChildRow(&sb, visKids[j], kidConnector, "  "+nextPrefix, colorEnabled)
+						if visKids[j].Children != nil {
+							deeper := renderChildSubtree(&sb, visKids[j].Children, statusFilter, colorEnabled, "  "+kidNextPrefix)
+							hiddenDeeper += deeper
+						}
+					}
+					if childTruncated {
+						remaining := chain.ChildrenTotal - len(chain.Children)
+						fmt.Fprintf(&sb, "  %s… %d more children — rerun with --all\n", nextPrefix, remaining)
+					}
+				}
+			} else {
+				writeChildRow(&sb, sib, connector, "  ", colorEnabled)
+			}
+		}
+		if truncated {
+			remaining := chain.SiblingsTotal - len(chain.Siblings)
+			fmt.Fprintf(&sb, "   … %d more siblings — rerun with --all to fetch everything\n", remaining)
+		} else if statusFilter != "" && (hiddenSibs > 0 || hiddenDeeper > 0) {
+			total := hiddenSibs + hiddenDeeper
+			fmt.Fprintf(&sb, "   (%d hidden by --%s filter, %d across all levels)\n", hiddenSibs, statusFilter, total)
+		}
+		if chain.DescendantsTruncated {
+			sb.WriteString("   (some subtrees may be incomplete — rerun with --all to fetch every descendant)\n")
+		}
+		return sb.String()
+	}
+
+	// No siblings: original subject + children rendering.
 	writeSubjectRow(&sb, chain.Subject, colorEnabled)
 
 	// Children error.
@@ -218,6 +290,29 @@ func writeSubjectRow(sb *strings.Builder, node HierarchyNode, colorEnabled bool)
 		summary)
 }
 
+// writeSiblingSubjectRow writes the subject node when it appears inline among siblings.
+// Uses ▶ instead of the tree connector to distinguish it visually.
+func writeSiblingSubjectRow(sb *strings.Builder, node HierarchyNode, connector string, prefix string, colorEnabled bool) {
+	typeBadge := ColorIssueType(node.IssueType, colorEnabled)
+	statusStr := ColorStatusName(node.Status, colorEnabled)
+	statusVis := len([]rune(TruncateString(node.Status, 14)))
+	statusPadded := statusStr + strings.Repeat(" ", max(0, 14-statusVis))
+
+	assignee := node.Assignee
+	if assignee == "" {
+		assignee = "(unassigned)"
+	}
+	summary := TruncateString(node.Summary, 50)
+	keyStr := Bold(TruncateString(node.Key, 14), colorEnabled)
+	fmt.Fprintf(sb, "%s▶ %-14s  %s  %s  %-22s  %s\n",
+		prefix,
+		keyStr,
+		typeBadge,
+		statusPadded,
+		TruncateString(assignee, 22),
+		summary)
+}
+
 // writeChildRow writes a single child row with the given tree connector and prefix.
 // Format: <prefix><connector> <KEY:14>  <TYPE-BADGE>  <STATUS:14>  <ASSIGNEE:22>  <SUMMARY:50>
 func writeChildRow(sb *strings.Builder, node HierarchyNode, connector string, prefix string, colorEnabled bool) {
@@ -243,10 +338,11 @@ func writeChildRow(sb *strings.Builder, node HierarchyNode, connector string, pr
 }
 
 // RenderHierarchyFlat returns a flat, tab-separated table of all nodes in DFS
-// order: depth, key, type, status, assignee, summary.
+// order: depth, key, type, status, assignee, summary, isSubject.
 // A header row is always emitted first.
 // statusFilter applies the same filter as RenderHierarchy.
 // Ancestors are included at negative depths; subject at depth 0; children at 1+.
+// When siblings are present they appear at depth 1 alongside the subject's children.
 func RenderHierarchyFlat(chain HierarchyChain, statusFilter string) string {
 	var sb strings.Builder
 	sb.WriteString("depth\tkey\ttype\tstatus\tassignee\tsummary\n")
@@ -289,7 +385,29 @@ func RenderHierarchyFlat(chain HierarchyChain, statusFilter string) string {
 			}
 		}
 	}
-	walkFlat(chain.Children, 1)
+
+	// Siblings appear at depth 1; subject's children appear at depth 1 nested under subject.
+	// In flat mode siblings and subject's children are interleaved at the same level.
+	if len(chain.Siblings) > 0 {
+		visible := filterChildren(chain.Siblings, statusFilter)
+		for _, sib := range visible {
+			if sib.IsSubject {
+				// Subject's children follow at depth 1.
+				walkFlat(chain.Children, 1)
+			} else {
+				a := sib.Assignee
+				if a == "" {
+					a = "(unassigned)"
+				}
+				fmt.Fprintf(&sb, "%d\t%s\t%s\t%s\t%s\t%s\n", 1, sib.Key, sib.IssueType, sib.Status, a, sib.Summary)
+				if sib.Children != nil {
+					walkFlat(sib.Children, 2)
+				}
+			}
+		}
+	} else {
+		walkFlat(chain.Children, 1)
+	}
 
 	if chain.DescendantsTruncated {
 		sb.WriteString("# (some subtrees may be incomplete — rerun with --all)\n")

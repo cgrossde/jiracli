@@ -86,7 +86,6 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	// Preserve AddCommand registration order in help output.
 	cobra.EnableCommandSorting = false
 
-
 	// Help template: Usage+Flags first, then Long description.
 	root.SetHelpTemplate(
 		"{{if or .Runnable .HasSubCommands}}{{.UsageString}}{{end}}" +

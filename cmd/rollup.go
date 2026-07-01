@@ -47,7 +47,15 @@ deeper, a hint is shown.
 Use --list to print a per-child breakdown table beneath the summary.
 
 Use --jql or --sprint to aggregate over an arbitrary set of issues instead of
-a hierarchy.  Add --group-by assignee to break down by person.`,
+a hierarchy.
+
+Add --group-by to break down the totals:
+  assignee        — group by person (requires --jql or --sprint)
+  status          — group by status name (e.g. "In Progress", "Pending Review")
+  statusCategory  — group by status category (To Do, In Progress, Done)
+
+In hierarchy mode, --group-by status / statusCategory replaces the per-level
+breakdown with a per-status breakdown of the direct children.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hasKey := len(args) == 1
@@ -56,9 +64,15 @@ a hierarchy.  Add --group-by assignee to break down by person.`,
 
 			// Mutual exclusion.
 			n := 0
-			if hasKey { n++ }
-			if hasJQL { n++ }
-			if hasSprint { n++ }
+			if hasKey {
+				n++
+			}
+			if hasJQL {
+				n++
+			}
+			if hasSprint {
+				n++
+			}
 			if n > 1 {
 				return fmt.Errorf("show rollup: <KEY>, --jql, and --sprint are mutually exclusive — choose one")
 			}
@@ -67,11 +81,17 @@ a hierarchy.  Add --group-by assignee to break down by person.`,
 			}
 
 			// --group-by validation.
-			if flags.GroupBy != "" && flags.GroupBy != "assignee" {
-				return fmt.Errorf("--group-by: only 'assignee' is supported — got %q", flags.GroupBy)
+			if flags.GroupBy != "" {
+				switch flags.GroupBy {
+				case "assignee", "status", "statusCategory":
+					// ok
+				default:
+					return fmt.Errorf("--group-by: supported values are 'assignee', 'status', 'statusCategory' — got %q", flags.GroupBy)
+				}
 			}
-			if flags.GroupBy != "" && hasKey {
-				return fmt.Errorf("--group-by requires --jql or --sprint")
+			// 'assignee' was JQL/sprint-only; 'status' and 'statusCategory' work everywhere.
+			if flags.GroupBy == "assignee" && hasKey {
+				return fmt.Errorf("--group-by=assignee requires --jql or --sprint")
 			}
 
 			var ref string
@@ -94,12 +114,26 @@ a hierarchy.  Add --group-by assignee to break down by person.`,
 	c.Flags().BoolVar(&flags.List, "list", false, "Print a per-child breakdown table beneath the summary")
 	c.Flags().StringVar(&flags.JQL, "jql", "", "Aggregate time tracking over JQL results instead of a hierarchy. Mutex with <KEY> and --sprint.")
 	c.Flags().IntVar(&flags.Sprint, "sprint", 0, "Aggregate over issues in this sprint id. Mutex with <KEY> and --jql.")
-	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Group rollup rows by this dimension. Supported: 'assignee'. Only valid with --jql or --sprint.")
+	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Group rollup rows by this dimension. Supported: 'assignee' (JQL/sprint only), 'status', 'statusCategory'. Rows show Count/Planned/Remaining/Spent/SP.")
 	return c
 }
 
 // ShowRollup is the Layer 1 implementation for show rollup.
 func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string, error) {
+	// Validate --group-by before any I/O so the Layer 1 function is self-contained.
+	if flags.GroupBy != "" {
+		switch flags.GroupBy {
+		case "assignee", "status", "statusCategory":
+			// ok
+		default:
+			return "", fmt.Errorf("--group-by: supported values are 'assignee', 'status', 'statusCategory' — got %q", flags.GroupBy)
+		}
+	}
+	hasKey := ref != ""
+	if flags.GroupBy == "assignee" && hasKey {
+		return "", fmt.Errorf("--group-by=assignee requires --jql or --sprint")
+	}
+
 	// JQL / sprint path — no hierarchy subject needed.
 	if flags.JQL != "" || flags.Sprint != 0 {
 		return showRollupJQL(ctx, flags)
@@ -203,6 +237,71 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 				hasDeeperLevel = true
 			}
 		}
+	}
+
+	// --group-by status / statusCategory in hierarchy mode — show a per-status
+	// breakdown table for each fetched level (L1, and L2 when depth >= 2).
+	if flags.GroupBy == "status" || flags.GroupBy == "statusCategory" {
+		var l2Nodes []jira.RollupNode
+		var l2Total int
+		var l2Truncated bool
+		if depth >= 2 && hasDeeperLevel {
+			for _, l1 := range l1Nodes {
+				if l1.ChildrenTotal == 0 {
+					continue
+				}
+				l2JQL := jira.ChildJQL(l1.IssueType, l1.Key, epicLinkField, parentLinkField)
+				nodes, total, trunc, fetchErr := fetchNodes(ctx, client, l2JQL, childFields, limit, spField)
+				if fetchErr != nil {
+					l2Truncated = true
+					continue
+				}
+				l2Nodes = append(l2Nodes, nodes...)
+				l2Total += total
+				if trunc {
+					l2Truncated = true
+				}
+			}
+		}
+
+		levels := []groupedLevel{
+			buildGroupedLevel(l1Nodes, l1Total, l1Truncated, flags.GroupBy, "Level 1"),
+		}
+		if len(l2Nodes) > 0 || l2Total > 0 {
+			levels = append(levels, buildGroupedLevel(l2Nodes, l2Total, l2Truncated, flags.GroupBy, "Level 2"))
+		}
+
+		if flags.List {
+			levels[0].nodes = l1Nodes
+			if len(levels) > 1 {
+				levels[1].nodes = l2Nodes
+			}
+		}
+
+		if flags.JSON {
+			var out strings.Builder
+			for _, lv := range levels {
+				t := jira.RollupTree{
+					SubjectKey:       key,
+					SubjectIssueType: subjectRaw.Fields.IssueType.Name,
+					SubjectSummary:   subjectRaw.Fields.Summary,
+					SubjectRow:       jira.SubjectRowFromRaw(subjectRaw, spField),
+					Rows:             lv.rows,
+					Nodes:            lv.nodes,
+					HasDeeperLevel:   hasDeeperLevel,
+					MaxFetchedDepth:  depth,
+					GroupBy:          flags.GroupBy,
+				}
+				data, err := json.Marshal(t)
+				if err != nil {
+					return "", fmt.Errorf("marshal rollup: %w", err)
+				}
+				out.Write(data)
+				out.WriteByte('\n')
+			}
+			return out.String(), nil
+		}
+		return renderRollupHierarchyGrouped(subjectRaw, levels, flags.GroupBy, spField), nil
 	}
 
 	// Optionally fetch L2 children.
@@ -314,8 +413,125 @@ func fetchNodes(ctx context.Context, client *jira.Client, jql string, fields []s
 	return nodes, total, truncated, nil
 }
 
+// groupedLevel holds a status-grouped view of one hierarchy level for rendering.
+type groupedLevel struct {
+	label     string            // e.g. "Level 1 — 6 Epics"
+	rows      []jira.RollupRow  // status-grouped rows, sorted
+	nodes     []jira.RollupNode // populated only when --list; nil otherwise
+	total     int               // server-reported total count for this level
+	truncated bool
+}
+
+// buildGroupedLevel groups nodes by the given dimension and returns a groupedLevel.
+// levelName is "Level 1" or "Level 2".
+func buildGroupedLevel(nodes []jira.RollupNode, total int, truncated bool, groupBy, levelName string) groupedLevel {
+	order := []string{}
+	groups := map[string][]jira.RollupNode{}
+	for _, n := range nodes {
+		k := nodeGroupKey(n, groupBy)
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], n)
+	}
+	rows := make([]jira.RollupRow, 0, len(order))
+	for _, k := range order {
+		row := jira.AggregateNodes(groups[k], k, false)
+		rows = append(rows, row)
+	}
+	sort.SliceStable(rows, statusRowLess(rows, groupBy == "statusCategory"))
+
+	// Build the level label from issue-type counts.
+	var label string
+	if truncated {
+		label = fmt.Sprintf("%s — %d of %d fetched", levelName, len(nodes), total)
+	} else {
+		itCounts := map[string]int{}
+		for _, n := range nodes {
+			itCounts[n.IssueType]++
+		}
+		label = levelName + " — " + typeCountLabel(itCounts, total)
+	}
+
+	return groupedLevel{
+		label:     label,
+		rows:      rows,
+		total:     total,
+		truncated: truncated,
+	}
+}
+
+// nodeGroupKey returns the grouping key for a node given the group-by dimension.
+// "" group-by means no grouping; caller MUST check before calling.
+func nodeGroupKey(n jira.RollupNode, groupBy string) string {
+	switch groupBy {
+	case "assignee":
+		if n.Assignee == "" {
+			return "Unassigned"
+		}
+		return n.Assignee
+	case "status":
+		if n.Status == "" {
+			return "(no status)"
+		}
+		return n.Status
+	case "statusCategory":
+		if n.StatusCategory == "" {
+			return "(no category)"
+		}
+		return n.StatusCategory
+	default:
+		return ""
+	}
+}
+
+// statusRank maps a status label to a sort bucket:
+// blocked=0, open/to-do/backlog=1, in-progress/review/test/pending=2, done/closed/resolved=3.
+// categoryMode=true treats label as a status category name; false uses heuristic matching.
+func statusRank(label string, categoryMode bool) int {
+	if categoryMode {
+		switch label {
+		case "To Do":
+			return 0
+		case "In Progress":
+			return 1
+		case "Done":
+			return 2
+		}
+		return 3 // unknown last
+	}
+	lower := strings.ToLower(label)
+	switch {
+	case strings.Contains(lower, "blocked"):
+		return 0
+	case strings.Contains(lower, "open"), strings.Contains(lower, "to do"),
+		strings.Contains(lower, "backlog"), strings.Contains(lower, "ready"):
+		return 1
+	case strings.Contains(lower, "in progress"), strings.Contains(lower, "review"),
+		strings.Contains(lower, "test"), strings.Contains(lower, "deploy"),
+		strings.Contains(lower, "pending"):
+		return 2
+	case strings.Contains(lower, "done"), strings.Contains(lower, "closed"),
+		strings.Contains(lower, "resolved"):
+		return 3
+	}
+	return 2 // unknown — group with in-progress
+}
+
+// statusRowLess orders RollupRows by status meaning: open → in-progress → done.
+// Within each bucket rows are sorted by label.
+func statusRowLess(rows []jira.RollupRow, categoryMode bool) func(i, j int) bool {
+	return func(i, j int) bool {
+		ri, rj := statusRank(rows[i].Label, categoryMode), statusRank(rows[j].Label, categoryMode)
+		if ri != rj {
+			return ri < rj
+		}
+		return rows[i].Label < rows[j].Label
+	}
+}
+
 // showRollupJQL aggregates time-tracking over an arbitrary JQL result set or sprint,
-// optionally grouped by assignee.
+// optionally grouped by a dimension.
 func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 	// Resolve effective fetch limit: --all overrides --limit (0 = no cap in fetchNodes).
 	limit := flags.Limit
@@ -355,34 +571,33 @@ func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 
 	var rows []jira.RollupRow
 
-	if flags.GroupBy == "assignee" {
-		// Group nodes by assignee display name.
-		order := []string{} // preserve first-seen order before sorting
+	if flags.GroupBy != "" {
+		order := []string{}
 		groups := map[string][]jira.RollupNode{}
 		for _, n := range nodes {
-			name := n.Assignee
-			if name == "" {
-				name = "Unassigned"
+			key := nodeGroupKey(n, flags.GroupBy)
+			if _, seen := groups[key]; !seen {
+				order = append(order, key)
 			}
-			if _, seen := groups[name]; !seen {
-				order = append(order, name)
-			}
-			groups[name] = append(groups[name], n)
+			groups[key] = append(groups[key], n)
 		}
-		for _, name := range order {
-			row := jira.AggregateNodes(groups[name], name, false)
+		for _, key := range order {
+			row := jira.AggregateNodes(groups[key], key, false)
 			rows = append(rows, row)
 		}
-		// Sort by OriginalEstimateSecs desc, then TimeSpentSecs desc, then name asc.
-		sort.SliceStable(rows, func(i, j int) bool {
-			if rows[i].OriginalEstimateSecs != rows[j].OriginalEstimateSecs {
-				return rows[i].OriginalEstimateSecs > rows[j].OriginalEstimateSecs
-			}
-			if rows[i].TimeSpentSecs != rows[j].TimeSpentSecs {
-				return rows[i].TimeSpentSecs > rows[j].TimeSpentSecs
-			}
-			return rows[i].Label < rows[j].Label
-		})
+		if flags.GroupBy == "assignee" {
+			sort.SliceStable(rows, func(i, j int) bool {
+				if rows[i].OriginalEstimateSecs != rows[j].OriginalEstimateSecs {
+					return rows[i].OriginalEstimateSecs > rows[j].OriginalEstimateSecs
+				}
+				if rows[i].TimeSpentSecs != rows[j].TimeSpentSecs {
+					return rows[i].TimeSpentSecs > rows[j].TimeSpentSecs
+				}
+				return rows[i].Label < rows[j].Label
+			})
+		} else {
+			sort.SliceStable(rows, statusRowLess(rows, flags.GroupBy == "statusCategory"))
+		}
 		// Append total row.
 		totalRow := jira.AggregateNodes(nodes, "Total", truncated)
 		totalRow.TotalCount = total
@@ -394,13 +609,14 @@ func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 	}
 
 	tree := jira.RollupTree{
-		SubjectKey:      subjectKey,
+		SubjectKey:       subjectKey,
 		SubjectIssueType: "", // empty signals JQL/sprint mode to renderer
-		SubjectSummary:  jql,
-		SubjectRow:      jira.RollupRow{}, // no own TT for a virtual subject
-		Rows:            rows,
-		HasDeeperLevel:  false,
-		MaxFetchedDepth: 1,
+		SubjectSummary:   jql,
+		SubjectRow:       jira.RollupRow{}, // no own TT for a virtual subject
+		Rows:             rows,
+		HasDeeperLevel:   false,
+		MaxFetchedDepth:  1,
+		GroupBy:          flags.GroupBy,
 	}
 	if flags.List {
 		tree.Nodes = nodes
@@ -651,6 +867,164 @@ func renderRollupTree(subjectRaw jira.IssueRaw, tree jira.RollupTree, hasDeeperL
 	return sb.String()
 }
 
+// renderRollupHierarchyGrouped renders a hierarchy rollup grouped by status or
+// statusCategory. One table is emitted per level (L1, optionally L2), each
+// preceded by a section label and followed by a progress bar and, when
+// --list is set, a per-child breakdown table.
+func renderRollupHierarchyGrouped(subjectRaw jira.IssueRaw, levels []groupedLevel, groupBy string, spField string) string {
+	var sb strings.Builder
+	clr := colorsEnabled()
+
+	// ── Subject header ───────────────────────────────────────────────────────
+	typeBadge := colorIssueType(subjectRaw.Fields.IssueType.Name)
+	statusBadge := colorStatusName(subjectRaw.Fields.Status.Name)
+	priority := "—"
+	if subjectRaw.Fields.Priority != nil {
+		priority = subjectRaw.Fields.Priority.Name
+	}
+	if clr {
+		fmt.Fprintf(&sb, "%s  %s  %s · %s\n",
+			typeBadge, jira.Bold(subjectRaw.Key, true), statusBadge, colorPriority(priority))
+	} else {
+		fmt.Fprintf(&sb, "%s  %s  %s · %s\n",
+			typeBadge, subjectRaw.Key, subjectRaw.Fields.Status.Name, priority)
+	}
+	fmt.Fprintf(&sb, "%s\n", jira.BoldFgW(subjectRaw.Fields.Summary, clr))
+	fixVersions := make([]string, 0, len(subjectRaw.Fields.FixVersions))
+	for _, fv := range subjectRaw.Fields.FixVersions {
+		fixVersions = append(fixVersions, fv.Name)
+	}
+	if len(fixVersions) > 0 {
+		fmt.Fprintf(&sb, "Fix Versions: %s\n", strings.Join(fixVersions, ", "))
+	}
+	sb.WriteByte('\n')
+
+	// Column layout — shared across all levels.
+	const (
+		colW   = 10
+		countW = 7
+		labelW = 30
+	)
+	rule := strings.Repeat("─", labelW+2+countW+2+(colW+2)*3+(colW+2)) + "\n"
+
+	dimHeader := "Status"
+	if groupBy == "statusCategory" {
+		dimHeader = "Status Category"
+	}
+
+	spCell := func(r jira.RollupRow) string {
+		if r.StoryPoints == 0 && r.PointedCount == 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%g", r.StoryPoints)
+	}
+	printRow := func(label string, r jira.RollupRow) {
+		fmt.Fprintf(&sb, "%-*s  %*d  %*s  %*s  %*s  %*s\n",
+			labelW, jira.TruncateString(label, labelW),
+			countW, r.TotalCount,
+			colW, dashIfZero(r.OriginalEstimateSecs),
+			colW, dashIfZero(r.RemainingEstimateSecs),
+			colW, dashIfZero(r.TimeSpentSecs),
+			colW, spCell(r))
+	}
+
+	// ── One block per level ──────────────────────────────────────────────────
+	for _, lv := range levels {
+		// Section label above the table.
+		fmt.Fprintf(&sb, "%s\n", sectionLabel(lv.label))
+
+		// Column header + rule.
+		fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s  %*s\n",
+			labelW, dimHeader,
+			countW, "Count",
+			colW, "Planned",
+			colW, "Remaining",
+			colW, "Spent",
+			colW, "SP")
+		sb.WriteString(rule)
+
+		// Status rows.
+		for _, row := range lv.rows {
+			printRow(row.Label, row)
+		}
+
+		// Total row: sum all status groups; use server total for count.
+		var total jira.RollupRow
+		total.TotalCount = lv.total
+		for _, row := range lv.rows {
+			total.OriginalEstimateSecs += row.OriginalEstimateSecs
+			total.RemainingEstimateSecs += row.RemainingEstimateSecs
+			total.TimeSpentSecs += row.TimeSpentSecs
+			total.StoryPoints += row.StoryPoints
+			total.PointedCount += row.PointedCount
+		}
+		sb.WriteString(rule)
+		printRow("Total", total)
+		sb.WriteByte('\n')
+
+		// Progress bar for this level.
+		if total.OriginalEstimateSecs > 0 {
+			bar := jira.FormatProgressBar(total.TimeSpentSecs, total.OriginalEstimateSecs, 24, clr)
+			fmt.Fprintf(&sb, "%s\n\n", bar)
+		}
+
+		// --list per-child table for this level.
+		if len(lv.nodes) > 0 {
+			sb.WriteString(sectionLabel("Children:") + "\n")
+			const keyW = 14
+			const sumW = 52
+			listRule := strings.Repeat("─", keyW+2+sumW+2+(colW+2)*4) + "\n"
+			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
+				keyW, "Key",
+				sumW, "Summary",
+				colW, "Planned",
+				colW, "Remaining",
+				colW, "Spent",
+				colW, "SP")
+			sb.WriteString("  " + listRule)
+			summaries := make([]string, len(lv.nodes))
+			for i, n := range lv.nodes {
+				summaries[i] = n.Summary
+			}
+			commonPfx := jira.CommonRunePrefix(summaries)
+			useMidElide := commonPfx > sumW/2
+			const midPrefixKeep = 10
+			for _, n := range lv.nodes {
+				sp := "—"
+				if n.StoryPoints != nil {
+					sp = fmt.Sprintf("%g", *n.StoryPoints)
+				}
+				effectiveW := sumW
+				if n.HasChildren {
+					effectiveW = sumW - 2
+				}
+				var sumTrunc string
+				if useMidElide {
+					sumTrunc = jira.TruncateMidPrefix(n.Summary, effectiveW, midPrefixKeep)
+				} else {
+					sumTrunc = jira.TruncateString(n.Summary, effectiveW)
+				}
+				if n.HasChildren {
+					sumTrunc += " ▸"
+				}
+				fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
+					keyW, n.Key,
+					sumW, sumTrunc,
+					colW, dashIfZero(n.OriginalEstimateSecs),
+					colW, dashIfZero(n.RemainingEstimateSecs),
+					colW, dashIfZero(n.TimeSpentSecs),
+					colW, sp)
+			}
+			if lv.truncated {
+				fmt.Fprintf(&sb, "  (first %d shown — pass --limit <n> or --limit 0 for all)\n", len(lv.nodes))
+			}
+			sb.WriteByte('\n')
+		}
+	}
+
+	return sb.String()
+}
+
 // dashIfZero returns jira.FormatSeconds(secs) or "—" when secs is 0.
 func dashIfZero(secs int64) string {
 	if secs == 0 {
@@ -689,26 +1063,59 @@ func renderRollupJQL(tree jira.RollupTree) string {
 
 	const (
 		colW   = 10
+		countW = 7
 		labelW = 36
 	)
-	rule := strings.Repeat("─", labelW+2+(colW+2)*3+(colW+2)) + "\n"
 
-	fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s\n",
-		labelW, "Assignee / Group",
-		colW, "Planned",
-		colW, "Remaining",
-		colW, "Spent",
-		colW, "SP")
+	// Choose header label based on grouping dimension.
+	dimHeader := "Assignee / Group"
+	switch tree.GroupBy {
+	case "status":
+		dimHeader = "Status"
+	case "statusCategory":
+		dimHeader = "Status Category"
+	}
+	grouped := tree.GroupBy != ""
+
+	var rule string
+	if grouped {
+		rule = strings.Repeat("─", labelW+2+countW+2+(colW+2)*3+(colW+2)) + "\n"
+		fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s  %*s\n",
+			labelW, dimHeader,
+			countW, "Count",
+			colW, "Planned",
+			colW, "Remaining",
+			colW, "Spent",
+			colW, "SP")
+	} else {
+		rule = strings.Repeat("─", labelW+2+(colW+2)*3+(colW+2)) + "\n"
+		fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s\n",
+			labelW, dimHeader,
+			colW, "Planned",
+			colW, "Remaining",
+			colW, "Spent",
+			colW, "SP")
+	}
 	sb.WriteString(rule)
 
 	printRow := func(label string, r jira.RollupRow) {
 		sp := dashIfZeroFloat(r.StoryPoints)
-		fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s\n",
-			labelW, jira.TruncateString(label, labelW),
-			colW, dashIfZero(r.OriginalEstimateSecs),
-			colW, dashIfZero(r.RemainingEstimateSecs),
-			colW, dashIfZero(r.TimeSpentSecs),
-			colW, sp)
+		if grouped {
+			fmt.Fprintf(&sb, "%-*s  %*d  %*s  %*s  %*s  %*s\n",
+				labelW, jira.TruncateString(label, labelW),
+				countW, r.TotalCount,
+				colW, dashIfZero(r.OriginalEstimateSecs),
+				colW, dashIfZero(r.RemainingEstimateSecs),
+				colW, dashIfZero(r.TimeSpentSecs),
+				colW, sp)
+		} else {
+			fmt.Fprintf(&sb, "%-*s  %*s  %*s  %*s  %*s\n",
+				labelW, jira.TruncateString(label, labelW),
+				colW, dashIfZero(r.OriginalEstimateSecs),
+				colW, dashIfZero(r.RemainingEstimateSecs),
+				colW, dashIfZero(r.TimeSpentSecs),
+				colW, sp)
+		}
 	}
 
 	// All rows except the last (Total) are regular group rows.

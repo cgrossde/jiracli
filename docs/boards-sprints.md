@@ -318,13 +318,18 @@ Returns only closed sprints whose name contains "Sprint" and whose end date is �
 {"id":2002,"name":"Sprint 43","state":"future","startDate":"2026-05-15","endDate":"2026-05-28","originBoardId":101}
 ```
 
-Pagination trailer when `is_last` is false:
+Pagination trailer when `is_last` is false. The shape depends on the query:
 
 ```json
-{"_pagination":{"page":1,"pages":-1,"total":-1,"next_page":2,"has_more":true}}
+// Default (cached) query — total unknown, so pages/total are omitted:
+{"_pagination":{"page":1,"next_page":2,"has_more":true}}
+
+// Filtered/sorted query (--name-contains, --after, --before, --sort) — paged
+// client-side over the full set, so real figures are reported:
+{"_pagination":{"page":1,"pages":3,"total":120,"next_page":2,"has_more":true}}
 ```
 
-`pages` and `total` are `-1` sentinels — the Agile sprint endpoint does not supply page count. Use `has_more`.
+`has_more` is always present and is the canonical "keep paging?" signal.
 
 ### Errors
 
@@ -463,7 +468,7 @@ Fetches the active sprint on a board, then renders the sprint summary followed b
 | `--board <id>` | — | **Required.** Scrum board ID |
 | `--assigned` | false | Show only issues assigned to the current user (client-side filter) |
 | `--exclude-done` | false | Hide Done issues (client-side filter) |
-| `--json` | false | NDJSON output; sprint object emitted first, then issue records |
+| `--json` | false | Single composite JSON object: `{sprint, issues, returned, total, notes}` |
 | `--profile <name>` | default | Credential profile |
 
 ### Behaviour
@@ -476,7 +481,7 @@ Calls `ListSprints(board, ["active"], page=1, limit=50)` and branches on the res
 | 1 | Render sprint summary followed by up to 25 issues |
 | > 1 | Error; lists each sprint with ID and name |
 
-`--assigned` and `--exclude-done` are applied client-side after the issue list is fetched. They do not affect the API call.
+`--assigned` and `--exclude-done` are applied client-side after the issue list is fetched. They do not affect the API call, and they apply identically in plain-text and `--json` mode (the same filtered set is returned by both).
 
 ### Plain-text output shape — 1 active sprint
 
@@ -504,14 +509,13 @@ When all issues fit within 25 (no more pages), the `→ jiracli sprint issues` t
 
 ### NDJSON output (`--json`)
 
-The sprint object is emitted first as one line, followed by one issue record per line. Pagination trailer appended when there are more than 25 issues:
+A single composite object — "the current sprint and its issues" is one logical record, so there is no heterogeneous stream of sprint + issue lines and no pagination trailer. `issues` reflects the `--assigned`/`--exclude-done` filters; `total` is the sprint's full issue count (pre-filter), `returned` the count actually embedded:
 
 ```json
-{"id":2001,"name":"Sprint 42","state":"active","startDate":"2026-05-01","endDate":"2026-05-14","originBoardId":101,"goal":"Stabilise login flow and close all P1s."}
-{"key":"ACME-123","summary":"Login page crashes on iOS 17","status":"In Progress",...}
-{"key":"ACME-124","summary":"Export to CSV silently drops rows","status":"To Do",...}
-{"_pagination":{"page":1,"pages":-1,"total":42,"next_page":null,"has_more":true}}
+{"sprint":{"id":2001,"name":"Sprint 42","state":"active","originBoardId":101,"goal":"Stabilise login flow and close all P1s."},"issues":[{"key":"ACME-123","summary":"Login page crashes on iOS 17","status":"In Progress","...":"..."},{"key":"ACME-124","summary":"Export to CSV silently drops rows","status":"To Do","...":"..."}],"returned":2,"total":42,"notes":["multiple active sprints — using most recent: 2001 \"Sprint 42\". Others: 2002 (Sprint 43). Pass --sprint <id> to override."]}
 ```
+
+`notes` is omitted when empty. See `docs/json-schema.md` for the full field table.
 
 ### Errors
 

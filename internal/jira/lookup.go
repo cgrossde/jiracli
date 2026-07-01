@@ -12,17 +12,17 @@ import (
 )
 
 const (
-	TTLMyself       = 24 * time.Hour
-	TTLFields       = 24 * time.Hour
-	TTLProjects     = 24 * time.Hour
-	TTLProject      = 1 * time.Hour
-	TTLCreateMeta   = 24 * time.Hour
-	TTLLinkTypes    = 24 * time.Hour
-	TTLPriorities   = 24 * time.Hour
-	TTLPrioritySchm = 24 * time.Hour
-	TTLLabels       = 5 * time.Minute
-	TTLStatuses     = 7 * 24 * time.Hour
-	TTLIssueTypes   = 24 * time.Hour
+	TTLMyself        = 24 * time.Hour
+	TTLFields        = 24 * time.Hour
+	TTLProjects      = 24 * time.Hour
+	TTLProject       = 1 * time.Hour
+	TTLCreateMeta    = 24 * time.Hour
+	TTLLinkTypes     = 24 * time.Hour
+	TTLPriorities    = 24 * time.Hour
+	TTLPrioritySchm  = 24 * time.Hour
+	TTLLabels        = 5 * time.Minute
+	TTLStatuses      = 7 * 24 * time.Hour
+	TTLIssueTypes    = 24 * time.Hour
 	TTLBoards        = 1 * time.Hour
 	TTLBoardConfig   = 1 * time.Hour
 	TTLSprintsActive = 1 * time.Hour
@@ -290,6 +290,7 @@ func (c *Client) SuggestLabels(ctx context.Context, query string) ([]string, boo
 	truncated := len(labels) == 15
 	return labels, truncated, nil
 }
+
 // portfolioSeedTerms are case-insensitive substring matches for the candidate
 // field NAME. A field matches when its name contains any seed term and does
 // not contain any deny term.

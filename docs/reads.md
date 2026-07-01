@@ -45,7 +45,7 @@ Fetches a single issue with inline latest comment and changelog.
 
 Never uses `fields=*all` or `expand=renderedFields`.
 
-When a hierarchy configuration exists for the profile (set via `setup` or `config hierarchy`), the Epic Link and Portfolio custom-field IDs are appended to the field list automatically.
+When a hierarchy configuration exists for the profile (set via `setup` or `config hierarchy`), the Epic Link, Parent Link, Portfolio, Story Points, and Sprint custom-field IDs are appended to the field list automatically.
 
 ### `--fields` spec
 
@@ -89,18 +89,21 @@ ACME-123  In Progress · Bug · High
 Assignee: Alex Chen (u1)               Reporter: Sam Patel
 Created:  2026-05-10                   Updated: 2026-06-22
 
+Components: AuthService
+Labels:     backend, auth
+Fix Versions: 4.5.0
+
 Estimates: Planned 40h · Remaining 32h · Spent 8h
 [████████░░░░░░░░░░░░░░░░] 20% spent
 Story Points: 5
 
-Epic: ACME-100  "Epic summary"
 Portfolio: ACME-50  "Modernise authentication platform"  (Open)
+  → jiracli show hierarchy ACME-123
+
+Epic: ACME-100  "Auth reliability work"  (In Progress)
 
 Sprint: Sprint 42  active  2026-06-15 → 2026-06-29
   → jiracli sprint show 2001
-
-Fix Versions: 2026.06
-Labels: label1, label2
 
 Description:
   Body wrapped at 80 cols, 2-space indent.
@@ -111,7 +114,7 @@ Links (2):
   → jiracli delete ACME-123:link:<id>
   → jiracli add link ACME-123 OTHER-123 --type "is related to"
 
-Components: ComponentName
+Resolution: Fixed
 
 Attachments (1):
   [1] filename.ext  142 KB  2026-05-11  (id: ACME-123:attach:11001)
@@ -272,6 +275,7 @@ bypassing the join:
 | `--profile <name>` | default | Credential profile |
 | `--keys-only` | false | Print one issue key per line — no headers, no footer, no overflow. Bypasses Layer 2 presenter. |
 | `--time` | false | Show time-tracking columns: `Estimate`, `Remaining`, `Spent`. Shorthand for `--fields +timeoriginalestimate,+timeestimate,+timespent`. Ignored when `--fields-only` is used. |
+| `--count-by <field>` | — | Aggregate all matching issues by this field; replaces the issue list with a count/percent histogram. Supported: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. Paginates internally to exhaustion — `--limit` and `--page` are ignored. Mutually exclusive with `--keys-only`. |
 
 ### Default behaviour
 
@@ -369,6 +373,40 @@ Prints one issue key per line. No headers, no formatting, no `[exit:N]` footer. 
 The `# next:` line can be detected with `grep -v '^#'` if a pure-keys stream is needed. Also available on `show assigned --keys-only`.
 
 Only the `key` field is fetched from the Jira API — no wasted field deserialization.
+
+### `--count-by` — aggregation histogram
+
+    jiracli search --jql '<query>' --count-by <field>
+
+Replaces the issue list with a three-column count/percent table. Always paginates to exhaustion — `--limit` and `--page` are ignored. Mutually exclusive with `--keys-only`.
+
+Supported fields: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`.
+
+**Plain-text output shape:**
+
+```
+search: issueType = Epic AND fixVersion = "v2026-Q2"  (count by status)
+total: 22 issues
+
+Status                    Count   Percent
+────────────────────────────────────────
+Open                          3    13.6%
+In Progress                   7    31.8%
+Pending Review                2     9.1%
+Closed                       10    45.5%
+────────────────────────────────────────
+Total                        22   100.0%
+```
+
+`status` and `statusCategory` use canonical ordering (blocked → open → in-progress → done). Other dimensions sort by count descending.
+
+**JSON output (`--json`):** one NDJSON record per value, then a `_meta` trailer:
+
+```ndjson
+{"dimension":"status","value":"Open","count":3,"percent":13.6}
+{"dimension":"status","value":"In Progress","count":7,"percent":31.8}
+{"_meta":{"total":22,"jql":"...","truncated":false}}
+```
 
 ---
 
@@ -851,15 +889,19 @@ Accepted formats: Jira relative dates (`-2w`, `-1d`, `-30m`) and ISO dates (`202
 
 ```
 ACME-50         [Initiative]  Open            Modernise authentication platform
-ACME-100        [Epic]        In Progress     Fix login redirect
-▶ ACME-123       [Bug]         In Progress     Fix login page timeout
-  ├─ ACME-150    [Sub-task]    To Do           Jane Smith              Reproduce on Safari
-  └─ ACME-151    [Sub-task]    Done            John Doe                Write regression test
+ACME-100        [Epic]        Open            Auth reliability work
+  ├─ PROJ-501     [Story]  To Do          Jane Smith              Add OAuth flow
+▶ ├─ ACME-123     [Bug]    In Progress    John Doe                Fix login page timeout
+  │  ├─ ACME-150   [Sub-task]  To Do      Jane Smith              Reproduce on Safari
+  │  └─ ACME-151   [Sub-task]  Done       John Doe                Write regression test
+  └─ PROJ-502     [Story]  Done           Jane Smith              Update session tokens
 
 [exit:0 | Xms]
 ```
 
 Ancestor rows are dimmed (grey) when the terminal supports ANSI. The subject is prefixed with `▶`. Children use `├─` / `└─` tree connectors. When children are capped at 15, a `… N more` line is appended.
+
+When the subject has a parent, its siblings (co-children of the parent) are shown alongside it. The subject is marked with `▶` inline in the sibling tree; its own children expand under it using `│  ` continuation lines. Non-Done siblings come first; the subject always appears first within its done-group. When siblings exceed 100, a `… N more siblings — rerun with --all` line is appended.
 
 When the subject has no ancestors and no children:
 ```
@@ -882,7 +924,13 @@ One object:
     {"key":"ACME-150","summary":"Reproduce on Safari","status":"To Do","statusCategory":"To Do","issueType":"Sub-task","assignee":"Jane Smith"},
     {"key":"ACME-151","summary":"Write regression test","status":"Done","statusCategory":"Done","issueType":"Sub-task","assignee":"John Doe"}
   ],
-  "childrenTotal": 2
+  "childrenTotal": 2,
+  "siblings": [
+    {"key":"PROJ-501","summary":"Add OAuth flow","status":"To Do","statusCategory":"To Do","issueType":"Story","assignee":"Jane Smith"},
+    {"key":"ACME-123","summary":"Fix login page timeout","status":"In Progress","statusCategory":"In Progress","issueType":"Bug","assignee":"John Doe","isSubject":true},
+    {"key":"PROJ-502","summary":"Update session tokens","status":"Done","statusCategory":"Done","issueType":"Story","assignee":"Jane Smith"}
+  ],
+  "siblingsTotal": 3
 }
 ```
 
@@ -918,6 +966,12 @@ When `--depth >= 2` and any level-2+ batch hit the 100-result cap without `--all
 ```
 In JSON mode, `"descendantsTruncated": true` is set on the root object.
 
+Field notes:
+- `descendantsTruncated`: `true` when `--depth >= 2` and any subtree hit the 100-result cap without `--all`.
+- `siblings`: array of sibling nodes (co-children of the nearest ancestor), including the subject with `"isSubject": true`. Omitted (`omitempty`) when the subject has no parent (root issue). Sorted: non-Done first, subject first within its done-group. Capped at 100 by default; use `--all` to fetch all.
+- `siblingsTotal`: total server-side sibling count. May exceed `len(siblings)` when capped. Omitted when zero.
+- `siblingsTruncated`: `true` when siblings were capped and more exist. Omitted (`omitempty`) when false.
+
 ### Errors
 
 - Hierarchy not configured: `[stderr] hierarchy not configured for profile "default" — run: jiracli setup --reconfigure`, exit 1.
@@ -939,8 +993,9 @@ Walks the direct children of the issue at `<KEY>`. Requires hierarchy fields to 
 
 **JQL / sprint mode** (new):
 
-    jiracli show rollup --sprint <id> [--group-by assignee] [flags]
-    jiracli show rollup --jql '<JQL>' [--group-by assignee] [flags]
+    jiracli show rollup --sprint <id> [--group-by assignee|status|statusCategory] [flags]
+    jiracli show rollup --jql '<JQL>' [--group-by assignee|status|statusCategory] [flags]
+    jiracli show rollup <KEY> --group-by status|statusCategory [flags]
 
 Aggregates over the result set of an arbitrary JQL query or a single sprint. Does not require hierarchy configuration. `<KEY>`, `--jql`, and `--sprint` are mutually exclusive.
 
@@ -954,7 +1009,7 @@ Aggregates over the result set of an arbitrary JQL query or a single sprint. Doe
 | `--all` | false | Fetch all children, bypassing the `--limit` cap |
 | `--jql <query>` | — | Aggregate over this JQL result set. Mutex with `<KEY>` and `--sprint`. |
 | `--sprint <id>` | — | Aggregate over issues in this sprint id. Mutex with `<KEY>` and `--jql`. |
-| `--group-by assignee` | — | Break down rows by assignee. Only valid with `--jql` or `--sprint`. |
+| `--group-by <dim>` | — | Group rollup rows by dimension. `assignee` (JQL/sprint only), `status`, `statusCategory` (both modes). In hierarchy mode, emits one labeled table per fetched level. |
 | `--json` | false | Output as a single JSON object |
 | `--profile <name>` | default | Credential profile |
 
@@ -1016,6 +1071,93 @@ Children:
   ACME-103        Implement shared-prefix titl…erent unique ending here ▸         —           —           —           —
 ```
 
+### `--group-by status` / `--group-by statusCategory` — status breakdown
+
+In **hierarchy mode**, replaces the per-level aggregate rows with a status-grouped table. One labeled table is emitted per fetched level — `--depth 2` yields two tables.
+
+Rows are sorted canonically: blocked → open → in-progress → done. `statusCategory` uses the three universal categories (To Do, In Progress, Done).
+
+```
+[Epic]  ACME-100  In Progress · High
+
+Level 1 — 6 Stories
+Status                            Count     Planned   Remaining       Spent          SP
+─────────────────────────────────────────────────────────────────────────────────────────
+Open                                  2         10d         10d           —           5
+In Progress                           3         20d          8d         12d          13
+Closed                                1         10d           —         10d           5
+─────────────────────────────────────────────────────────────────────────────────────────
+Total                                 6         40d         18d         22d          23
+
+[████████████░░░░░░░░░░░░] · 55% spent
+
+[exit:0 | Xms]
+```
+
+With `--depth 2`:
+
+```
+[Initiative]  PROJ-50  Open · —
+Modernise authentication platform
+
+Level 1 — 3 Epics
+Status                            Count     Planned   Remaining       Spent          SP
+─────────────────────────────────────────────────────────────────────────────────────────
+In Progress                           2         20d          8d         12d           —
+Closed                                1         10d           —         10d           —
+─────────────────────────────────────────────────────────────────────────────────────────
+Total                                 3         30d          8d         22d           —
+
+[█████████████████░░░░░░░] · 73% spent
+
+Level 2 — 18 Stories
+Status                            Count     Planned   Remaining       Spent          SP
+─────────────────────────────────────────────────────────────────────────────────────────
+Open                                  5         40d         40d           —          15
+In Progress                           8         64d         20d         44d          32
+Closed                                5         40d           —         40d          20
+─────────────────────────────────────────────────────────────────────────────────────────
+Total                                18        144d         60d         84d          67
+
+[████████████████░░░░░░░░] · 58% spent
+
+[exit:0 | Xms]
+```
+
+`--list` appends a Children: table after each level's status table.
+
+In **JQL/sprint mode**, the column header changes to `Status` or `Status Category`, and a `Count` column is added:
+
+```
+Rollup: issueType = Epic AND fixVersion = "v2026-Q2"  (31 issues)
+
+Status                                  Count     Planned   Remaining       Spent          SP
+───────────────────────────────────────────────────────────────────────────────────────────────
+Open                                        8        180d        180d           —           —
+In Progress                                15        640d        240d        360d         120
+Closed                                      8        320d           —        310d          85
+───────────────────────────────────────────────────────────────────────────────────────────────
+Total                                      31       1140d        420d        670d         205
+
+→ jiracli show <KEY>  # to drill into any issue
+```
+
+With `--group-by statusCategory`:
+
+```
+Rollup: sprint = 2001  (31 issues)
+
+Status Category                         Count     Planned   Remaining       Spent          SP
+───────────────────────────────────────────────────────────────────────────────────────────────
+To Do                                       8        180d        180d           —           —
+In Progress                                15        640d        240d        360d         120
+Done                                        8        320d           —        310d          85
+───────────────────────────────────────────────────────────────────────────────────────────────
+Total                                      31       1140d        420d        670d         205
+
+→ jiracli show <KEY>  # to drill into any issue
+```
+
 ### JSON output shape (`--json`)
 
 Single JSON object:
@@ -1048,15 +1190,16 @@ Single JSON object:
   ],
   "nodes": null,
   "hasDeeperLevel": true,
-  "maxFetchedDepth": 1
+  "maxFetchedDepth": 1,
+  "groupBy": "status"
 }
 ```
 
-`nodes` is `null` unless `--list` is passed; when populated each node includes `hasChildren: true/false`. `rows` has one entry at `--depth 1`, two at `--depth 2`. `issueTypeCounts` maps issue type name → count within that level; omitted when empty. `hasDeeperLevel` is `true` when any L1 child has its own children.
+`nodes` is `null` unless `--list` is passed; when populated each node includes `hasChildren: true/false`. `rows` has one entry at `--depth 1`, two at `--depth 2`. `issueTypeCounts` maps issue type name → count within that level; omitted when empty. `hasDeeperLevel` is `true` when any L1 child has its own children. `groupBy` is `"assignee"`, `"status"`, or `"statusCategory"` when `--group-by` was used; omitted otherwise. In hierarchy `--group-by` mode, one JSON object per level is emitted as NDJSON instead of a single object.
 
 ### JQL / sprint mode output
 
-When `--sprint` or `--jql` is used, the subject-header block is replaced with a one-line title. The table header labels the column as "Assignee / Group".
+When `--sprint` or `--jql` is used, the subject-header block is replaced with a one-line title. The column header changes to match the grouping dimension: `Assignee / Group` (no `--group-by` or `--group-by assignee`), `Status` (`--group-by status`), or `Status Category` (`--group-by statusCategory`). With `--group-by status` or `--group-by statusCategory`, a `Count` column is also added.
 
 Without `--group-by`:
 

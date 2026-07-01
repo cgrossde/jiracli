@@ -3,6 +3,7 @@ package jira
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -22,6 +23,12 @@ type HierarchyNode struct {
 type HierarchyChain struct {
 	Ancestors              []HierarchyNode `json:"ancestors"`
 	Subject                HierarchyNode   `json:"subject"`
+	// Siblings is the set of co-children of Subject under the nearest ancestor.
+	// The Subject itself appears in the slice with IsSubject=true.
+	// Nil when there are no ancestors (root issue).
+	Siblings               []HierarchyNode `json:"siblings,omitempty"`
+	SiblingsTotal          int             `json:"siblingsTotal,omitempty"`
+	SiblingsTruncated      bool            `json:"siblingsTruncated,omitempty"`
 	Children               []HierarchyNode `json:"children"`
 	ChildrenTotal          int             `json:"childrenTotal"`
 	ChildrenTruncated      bool            `json:"childrenTruncated,omitempty"`
@@ -267,9 +274,69 @@ func BuildHierarchy(
 		}
 	}
 
+	// Step 4: fetch siblings (co-children of the subject under its nearest ancestor).
+	// Only attempted when there is at least one ancestor and we know the parent's issue type.
+	var siblings []HierarchyNode
+	siblingsTotal := 0
+	siblingsTruncated := false
+	if len(ancestors) > 0 {
+		parentNode := ancestors[len(ancestors)-1]
+		parentPtr := []*HierarchyNode{&parentNode}
+		strategy, ok := strategyForLevel(parentPtr, hf, portfolioFieldName)
+		if ok {
+			// Include hierarchy fields so parentKeyForChild can attribute each child to its parent.
+		sibFields := []string{"summary", "status", "issuetype", "assignee"}
+		for _, fid := range hf.FieldList() {
+			if fid != "" {
+				sibFields = append(sibFields, fid)
+			}
+		}
+			byParent, total, serr := fetchChildrenForParents(ctx, c, []string{parentNode.Key}, strategy, hf, portfolioFieldName, sibFields, fetchAll, "")
+			if serr == nil {
+				rawSibs := byParent[parentNode.Key]
+				// Inject the subject (with its already-fetched children) into the sibling list,
+				// replacing the entry returned by the API so we don't double-fetch.
+				found := false
+				for i, sib := range rawSibs {
+					if sib.Key == subject.Key {
+						rawSibs[i] = subject
+						rawSibs[i].Children = children
+						found = true
+						break
+					}
+				}
+				if !found {
+					// Subject not in page (e.g. cap hit) — prepend it.
+					rawSibs = append([]HierarchyNode{subject}, rawSibs...)
+				}
+				// Sort: Done last, subject first among non-Done.
+				sort.SliceStable(rawSibs, func(i, j int) bool {
+					iSubj := rawSibs[i].IsSubject
+					jSubj := rawSibs[j].IsSubject
+					iDone := strings.EqualFold(rawSibs[i].StatusCategory, "Done")
+					jDone := strings.EqualFold(rawSibs[j].StatusCategory, "Done")
+					if iDone != jDone {
+						return !iDone
+					}
+					// Among same done-ness: subject first.
+					if iSubj != jSubj {
+						return iSubj
+					}
+					return false
+				})
+				siblings = rawSibs
+				siblingsTotal = total
+				siblingsTruncated = !fetchAll && total > len(rawSibs)
+			}
+		}
+	}
+
 	return HierarchyChain{
 		Ancestors:            ancestors,
 		Subject:              subject,
+		Siblings:             siblings,
+		SiblingsTotal:        siblingsTotal,
+		SiblingsTruncated:    siblingsTruncated,
 		Children:             children,
 		ChildrenTotal:        childrenTotal,
 		ChildrenTruncated:    truncated,

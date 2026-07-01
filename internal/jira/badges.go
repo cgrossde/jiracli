@@ -119,6 +119,23 @@ func ColorStatusName(name string, colorEnabled bool) string {
 	}
 }
 
+// ColorStatusCategory returns a colored status badge keyed on the status category string
+// ("To Do", "In Progress", "Done") rather than the status display name.
+// Use this when statusCategory is available — it's more reliable than matching status names.
+func ColorStatusCategory(category string, statusName string, colorEnabled bool) string {
+	if !colorEnabled {
+		return statusName
+	}
+	switch strings.ToLower(category) {
+	case "in progress":
+		return badge(ansiBgInProgress, statusName)
+	case "done":
+		return badge(ansiBgDone, statusName)
+	default:
+		return badge(ansiBgToDo, statusName)
+	}
+}
+
 // Bold returns s wrapped in ANSI bold when on is true; s unchanged otherwise.
 func Bold(s string, on bool) string {
 	if !on {

@@ -263,7 +263,7 @@ jiracli/
 │   ├── attachments.go         show attachments <KEY>: list attachments
 │   ├── attachment.go          attachment download helper (streaming to stdout or file)
 │   │
-│   ├── search.go              search <jql>: JQL search with pagination
+│   ├── search.go              search [<jql...>]: JQL search with pagination; --count-by for aggregation histogram; --keys-only for pipe-friendly output
 │   ├── open.go                open <ref>: open issue/comment/attachment in browser
 │   ├── me.go                  auth status (current user)
 │   │
@@ -285,7 +285,7 @@ jiracli/
 │   ├── edit_sprint.go         edit sprint <KEY...> <target>: move issues into sprint or backlog
 │   │
 │   ├── create.go              create issue
-│   ├── rollup.go              show rollup <KEY>: aggregate time + SP across hierarchy levels (--depth, --list, --all)
+│   ├── rollup.go              show rollup [<KEY>]: aggregate time + SP across hierarchy levels or JQL/sprint sets (--depth, --list, --all, --limit, --jql, --sprint, --group-by)
 │   ├── credentials.go         resolveEntry / resolveEntryAndStore — shared credential helpers
 │   ├── lookup.go              lookup command group root + suggestLabels helper
 │   ├── lookup_users.go        lookup users
@@ -389,7 +389,7 @@ Layer 2 presentation.
 | `client.go` | HTTP client (Get/Post/Put/Delete/PostMultipart), `MapStatus`, `rateLimitError`, sentinel errors (`ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrRateLimited`, `ErrServer`) |
 | `agile.go` | Agile REST client (`AgileGet`/`AgilePost`/`AgilePut`, `agileURL`), domain types (`Board`, `BoardConfig`, `BoardColumn`, `BoardFilter`, `Sprint`, `AgileConfig`), read methods (`ListBoards`, `ListBoardsCached`, `GetBoardConfig`, `GetBoardConfigCached`, `GetBoardFilter`, `ListSprints`, `ListSprintsCached`, `ListSprintNames`, `HydrateSprintDates`, `ListAllSprintsPaged`, `GetSprint`, `ListSprintIssues`, `ListBoardIssues`), mutation methods (`MoveIssuesToSprint`, `MoveIssuesToBacklog`), `ResolveSprintField`, `ErrBoardNoSprints`, `sprintQueryEnvelope` |
 | `ref.go` | Reference grammar parser (`ACME-123`, `:comment:`, `:attach:`, `:link:`, browse URLs) — `RefIssue`, `RefComment`, `RefAttachment`, `RefLink` |
-| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord, ResolveActivityStatusCategories, SprintRef, parseSprintRaw |
+| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord (reads ParentLink as Portfolio fallback when primary Portfolio field is empty), ResolveActivityStatusCategories, SprintRef, parseSprintRaw |
 | `search.go` | Search (POST /search), SearchIssueRecord (incl. Sprints []SprintRef), ToSearchRecord |
 | `jql.go` | DefaultOpenFilter (statusCategory-based, not status names) |
 | `comments.go` | GetComments, AddComment |
@@ -406,8 +406,8 @@ Layer 2 presentation.
 | `preview.go` | Preview, ValidationRow, Render, Execute — supports `Method: "DELETE"` (body block suppressed when nil) |
 | `render.go` | FormatRelative, WrapAt, FormatBytes, TruncateString, ColWidth, PadRight, IsASCIILetter, RenderWikiMarkup, AbbreviateChange, StatusCategoryRank, CommonRunePrefix, TruncateMidPrefix |
 | `badges.go` | `ColorsEnabled`, `StripAnsi`, `ColorIssueType`, `ColorStatusName`, `Bold`, `Dim` — ANSI badge helpers used by renderers and `internal/output` |
-| `hierarchy.go` | `HierarchyNode`, `HierarchyChain` (incl. `DescendantsTruncated`), `BuildHierarchy` (depth + since params), `fetchChildrenForParents`, `strategyForLevel`, `parentKeyForChild` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink), batched multi-level children fetch, 400 batch-halving retry |
-| `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer with recursive subtree (depth ≥ 2), `renderChildSubtree`; `RenderHierarchyFlat` — tab-separated flat output with DFS order and negative-depth ancestors |
+| `hierarchy.go` | `HierarchyNode`, `HierarchyChain` (incl. `DescendantsTruncated`, `Siblings`/`SiblingsTotal`/`SiblingsTruncated`), `BuildHierarchy` (depth + since params), `fetchChildrenForParents`, `strategyForLevel`, `parentKeyForChild` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink), sibling fetch (co-children of nearest ancestor, injected with `IsSubject`), batched multi-level children fetch, 400 batch-halving retry |
+| `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer; when siblings present, renders them as a unified tree with subject marked `▶` inline and its children expanding under it; `renderChildSubtree`; `writeSiblingSubjectRow`; `RenderHierarchyFlat` — tab-separated flat output with DFS order and negative-depth ancestors |
 | `rollup.go` | `RollupRow`, `RollupNode`, `RollupTree`, `ChildJQL`, `AggregateNodes`, `RollupNodeFromRaw`, `SubjectRowFromRaw`, `IssueTypeHasEpicLinkChildren` — hierarchy time/SP rollup types and aggregation helpers |
 
 ### HTTP error handling

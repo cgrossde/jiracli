@@ -15,6 +15,7 @@ import (
 
 	"github.com/cgrossde/jiracli/internal/cache"
 	"github.com/cgrossde/jiracli/internal/jira"
+	"github.com/cgrossde/jiracli/internal/keychain"
 )
 
 // NewSprintCmd builds the "sprint" command group.
@@ -63,7 +64,7 @@ type sprintCurrentFlags struct {
 	Profile     string
 	JSON        bool
 	Board       int
-	Sprint      int  // override: use this sprint id instead of auto-resolving
+	Sprint      int // override: use this sprint id instead of auto-resolving
 	Assigned    bool
 	ExcludeDone bool
 }
@@ -239,7 +240,7 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 			}
 			return "", fetchErr
 		}
-		return renderSprintList(flags, sprints, isLast, page, limit, false), nil
+		return renderSprintList(flags, sprints, isLast, page, limit, -1 /*total unknown on cached fast path*/), nil
 	}
 
 	// Filtered paths all need the full sprint set.
@@ -353,7 +354,7 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 	page1Sprints := filtered[start:end]
 	isLast := end >= total
 
-	return renderSprintList(flags, page1Sprints, isLast, page, limit, true /*filteredMode*/), nil
+	return renderSprintList(flags, page1Sprints, isLast, page, limit, total), nil
 }
 
 func sprintShow(ctx context.Context, flags sprintShowFlags, idStr string) (string, error) {
@@ -466,6 +467,47 @@ func sprintCurrent(ctx context.Context, flags sprintCurrentFlags) (string, error
 		}
 	}
 
+	// Embed issues (default limit 25).
+	issueLimit := 25
+	fields := defaultSearchFields
+	resp, issErr := client.ListSprintIssues(ctx, spr.ID, 1, issueLimit, fields)
+
+	// Apply client-side filters once, so plain text and --json return the same set.
+	if issErr == nil {
+		resp.Issues = filterCurrentSprintIssues(ctx, client, entry, flags, resp.Issues)
+	}
+
+	if flags.JSON {
+		records := make([]jira.SearchIssueRecord, 0, len(resp.Issues))
+		for _, raw := range resp.Issues {
+			records = append(records, jira.ToSearchRecord(raw, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField))
+		}
+		if issErr != nil {
+			notes = append(notes, fmt.Sprintf("sprint issues unavailable: %v", issErr))
+		}
+		// Single composite object: "the current sprint and its issues" is one
+		// logical record, so it is emitted as one self-describing JSON object
+		// rather than a heterogeneous stream of sprint + issue lines.
+		out := struct {
+			Sprint   jira.Sprint              `json:"sprint"`
+			Issues   []jira.SearchIssueRecord `json:"issues"`
+			Returned int                      `json:"returned"`
+			Total    int                      `json:"total"`
+			Notes    []string                 `json:"notes,omitempty"`
+		}{
+			Sprint:   spr,
+			Issues:   records,
+			Returned: len(records),
+			Total:    resp.Total,
+			Notes:    notes,
+		}
+		data, err := json.Marshal(out)
+		if err != nil {
+			return "", fmt.Errorf("marshal sprint current: %w", err)
+		}
+		return string(data) + "\n", nil
+	}
+
 	var sb strings.Builder
 	for _, n := range notes {
 		fmt.Fprintf(&sb, "note: %s\n", n)
@@ -476,33 +518,9 @@ func sprintCurrent(ctx context.Context, flags sprintCurrentFlags) (string, error
 	sb.WriteString(renderSprintDetail(spr))
 	sb.WriteByte('\n')
 
-	// Embed issues (default limit 25).
-	issueLimit := 25
-	fields := defaultSearchFields
-	resp, issErr := client.ListSprintIssues(ctx, spr.ID, 1, issueLimit, fields)
 	if issErr != nil {
 		fmt.Fprintf(&sb, "[sprint issues unavailable: %v]\n", issErr)
 		return sb.String(), nil
-	}
-
-	if flags.JSON {
-		sprintData, _ := json.Marshal(spr)
-		issueJSON, jsonErr := renderSearchJSON(resp, 1, issueLimit, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField)
-		if jsonErr != nil {
-			return "", jsonErr
-		}
-		return string(sprintData) + "\n" + issueJSON, nil
-	}
-
-	// Client-side filters.
-	if flags.ExcludeDone {
-		var filtered []jira.IssueRaw
-		for _, issue := range resp.Issues {
-			if !strings.EqualFold(issue.Fields.Status.StatusCategory.Key, "done") {
-				filtered = append(filtered, issue)
-			}
-		}
-		resp.Issues = filtered
 	}
 
 	header := fmt.Sprintf("sprint: %d  %s", spr.ID, spr.Name)
@@ -513,6 +531,42 @@ func sprintCurrent(ctx context.Context, flags sprintCurrentFlags) (string, error
 		fmt.Fprintf(&sb, "→ jiracli sprint issues %d --limit 100\n", spr.ID)
 	}
 	return sb.String(), nil
+}
+
+// filterCurrentSprintIssues applies the --assigned and --exclude-done client-side
+// filters to a sprint's issue list. Both output modes call it so plain text and
+// --json always return the same set.
+func filterCurrentSprintIssues(ctx context.Context, client *jira.Client, entry keychain.Entry, flags sprintCurrentFlags, issues []jira.IssueRaw) []jira.IssueRaw {
+	if flags.Assigned {
+		// Resolve "me" without an extra round-trip when the profile knows it.
+		me, meDisplay := entry.User, entry.DisplayName
+		if me == "" && meDisplay == "" {
+			if u, err := client.Myself(ctx); err == nil {
+				me, meDisplay = u.Name, u.DisplayName
+			}
+		}
+		filtered := make([]jira.IssueRaw, 0, len(issues))
+		for _, issue := range issues {
+			if issue.Fields.Assignee == nil {
+				continue
+			}
+			if (me != "" && strings.EqualFold(issue.Fields.Assignee.Name, me)) ||
+				(meDisplay != "" && strings.EqualFold(issue.Fields.Assignee.DisplayName, meDisplay)) {
+				filtered = append(filtered, issue)
+			}
+		}
+		issues = filtered
+	}
+	if flags.ExcludeDone {
+		filtered := make([]jira.IssueRaw, 0, len(issues))
+		for _, issue := range issues {
+			if !strings.EqualFold(issue.Fields.Status.StatusCategory.Key, "done") {
+				filtered = append(filtered, issue)
+			}
+		}
+		issues = filtered
+	}
+	return issues
 }
 
 // pickCurrentSprint selects the best "current" sprint from a mixed active+future list.
@@ -672,8 +726,11 @@ func formatSprintDate(s string) string {
 }
 
 // renderSprintList renders a list of sprints as plain text or NDJSON.
-// filteredMode=true enables real pagination metadata in the JSON trailer.
-func renderSprintList(flags sprintListFlags, sprints []jira.Sprint, isLast bool, page, limit int, filteredMode bool) string {
+// total is the count of all sprints matching the query when known (filtered
+// path), or -1 when unknown (cached fast path). When total >= 0 the JSON
+// pagination trailer carries real page/total figures; otherwise it falls back
+// to a has_more-only trailer.
+func renderSprintList(flags sprintListFlags, sprints []jira.Sprint, isLast bool, page, limit, total int) string {
 	if flags.JSON {
 		var sb strings.Builder
 		for _, s := range sprints {
@@ -682,8 +739,13 @@ func renderSprintList(flags sprintListFlags, sprints []jira.Sprint, isLast bool,
 			sb.WriteByte('\n')
 		}
 		if !isLast {
-			fmt.Fprintf(&sb, "{\"_pagination\":{\"page\":%d,\"pages\":-1,\"total\":-1,\"next_page\":%d,\"has_more\":true}}\n",
-				page, page+1)
+			if total >= 0 {
+				fmt.Fprintf(&sb, "{\"_pagination\":{\"page\":%d,\"pages\":%d,\"total\":%d,\"next_page\":%d,\"has_more\":true}}\n",
+					page, totalPages(total, limit), total, page+1)
+			} else {
+				fmt.Fprintf(&sb, "{\"_pagination\":{\"page\":%d,\"next_page\":%d,\"has_more\":true}}\n",
+					page, page+1)
+			}
 		}
 		return sb.String()
 	}

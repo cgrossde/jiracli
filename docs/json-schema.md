@@ -3,8 +3,19 @@
 **v1 — additive changes only. Renaming or removing fields is a major version bump.**
 
 All `--json` output is [NDJSON](https://ndjson.org/): one JSON object per line, no wrapping array.
-Errors always go to stderr; stdout carries only records and optional pagination trailers.
+Errors always go to stderr; stdout carries only records and optional trailer lines.
 The `[exit:N | Xms]` footer is suppressed in `--json` mode.
+
+### Trailer records
+
+A *trailer* is a final line whose **sole top-level key is underscore-prefixed**, so consumers can skip it without inspecting the payload (`jq 'select(has("_pagination") or has("_meta") | not)'`). Two trailer kinds exist:
+
+| Trailer | Meaning | Emitted by |
+|---|---|---|
+| `_pagination` | More pages are available; carries the next-page cursor/number. | Paginated list commands (search, comments, history, sprint list, …) |
+| `_meta` | Aggregation summary for a command that consumes its whole result set (totals, source query, whether paging was cut short). | `search --count-by` |
+
+Data records never start with `_`. A trailer is omitted entirely when it carries no signal (e.g. no more pages).
 
 ---
 
@@ -349,6 +360,12 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
     }
   ],
   "childrenTotal": 2,
+  "siblings": [
+    {"key":"PROJ-501","summary":"Add OAuth flow","status":"To Do","statusCategory":"To Do","issueType":"Story","assignee":"Jane Smith"},
+    {"key":"ACME-123","summary":"Fix login page timeout","status":"In Progress","statusCategory":"In Progress","issueType":"Bug","assignee":"John Doe","isSubject":true},
+    {"key":"PROJ-502","summary":"Update session tokens","status":"Done","statusCategory":"Done","issueType":"Story","assignee":"Jane Smith"}
+  ],
+  "siblingsTotal": 3,
   "descendantsTruncated": false
 }
 ```
@@ -363,6 +380,9 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 - Node `isSubject`: `true` only on the subject node; omitted on all other nodes.
 - Node `children` (recursive): present only when `--depth N` is ≥ 2. `omitempty` — absent on nodes whose children were not fetched or are empty. A depth-1 invocation never emits this field.
 - `descendantsTruncated`: `false` when all descendants were fully fetched; `true` when any level-2+ batch hit the 100-result cap without `--all`. Omitted (`omitempty`) when `false`.
+- `siblings`: array of `HierarchyNode` (co-children of the nearest ancestor), including the subject node with `"isSubject": true`. Sorted: non-Done first, subject first within its done-group. Omitted (`omitempty`) when the subject has no parent (root issue). Capped at 100 by default; `--all` fetches all.
+- `siblingsTotal`: total server-side sibling count; may exceed `len(siblings)`. Omitted (`omitempty`) when zero.
+- `siblingsTruncated`: `true` when siblings were capped at 100 and more exist. Omitted (`omitempty`) when false.
 - `--flat --json` mode: emits NDJSON flat — one object per node with fields `key`, `depth` (int, ancestors negative), `parentKey` (omitted for the subject), `issueType`, `status`, `assignee` (omitted when unset), `summary`, `isSubject` (omitted unless true). No `HierarchyChain` wrapper — every node is its own line. `descendantsTruncated` is not emitted in flat mode.
 
 ---
@@ -370,9 +390,9 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 ## rollup
 
 Commands:
-- `jiracli show rollup <KEY> [--json] [--depth N] [--list]` — hierarchy mode
-- `jiracli show rollup --sprint <id> [--group-by assignee] [--json]` — sprint mode
-- `jiracli show rollup --jql '<JQL>' [--group-by assignee] [--json]` — JQL mode
+- `jiracli show rollup <KEY> [--json] [--depth N] [--list] [--group-by status|statusCategory]` — hierarchy mode
+- `jiracli show rollup --sprint <id> [--group-by assignee|status|statusCategory] [--json]` — sprint mode
+- `jiracli show rollup --jql '<JQL>' [--group-by assignee|status|statusCategory] [--json]` — JQL mode
 
 One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jira/rollup.go`).
 
@@ -448,14 +468,18 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `subjectIssueType` | string | Issue type of the subject |
 | `subjectSummary` | string | Summary of the subject |
 | `subject` | `RollupRow` | The subject's own time tracking and SP |
-| `rows` | `[]RollupRow` | Level aggregates: one row at `--depth 1`; two rows at `--depth 2` |
+| `rows` | `[]RollupRow` | Hierarchy mode: level aggregates (one row at `--depth 1`, two at `--depth 2`). `--group-by` mode: status-grouped rows, one per distinct value, sorted canonically. JQL/sprint mode: group rows or a single Total row. |
 | `nodes` | `[]RollupNode` | Per-child breakdown; `null` unless `--list` is passed |
 | `hasDeeperLevel` | bool | `true` when any L1 child has its own children |
 | `maxFetchedDepth` | int | Highest depth actually fetched (1 or 2) |
+| `groupBy` | string | `"assignee"`, `"status"`, or `"statusCategory"` when `--group-by` was used; omitted (`omitempty`) otherwise |
 
-> **JQL / sprint mode:** when `--jql` or `--sprint` is used instead of a `<KEY>`, `subjectIssueType` is `""` (empty string) and `subject` fields are all-zero. The `rows` array carries the group rows (`--group-by assignee`) or a single `Total` row. `hasDeeperLevel` is always `false` in this mode.
+> **JQL / sprint mode:** when `--jql` or `--sprint` is used, `subjectIssueType` is `""` and `subject` fields are all-zero. The `rows` array carries the group rows (`--group-by`) or a single `Total` row. `hasDeeperLevel` is always `false`.
 
-No pagination trailer (single-object response).
+> **Hierarchy `--group-by` mode:** one `RollupTree` JSON object is emitted per fetched level as NDJSON (not a single object). Each object's `rows` carries the status-grouped rows for that level; `groupBy` is set on every emitted object.
+
+No pagination trailer (single-object response per level).
+
 
 ---
 
@@ -529,7 +553,9 @@ One record per sprint. Produced by `internal/jira.Sprint` (`internal/jira/agile.
 - `startDate`, `endDate`, `activatedDate`, `goal`: omitted (`omitempty`) when absent.
 - `originBoardId`: the board this sprint was created on (may differ from the queried board when sprints are shared).
 
-Pagination trailer (same `_pagination` shape as search; `pages` and `total` are `-1`).
+Pagination trailer:
+- **Filtered/sorted queries** (`--name-contains`, `--after`, `--before`, `--sort`) page over the full sprint set client-side and report real figures: `{"_pagination":{"page":1,"pages":3,"total":120,"next_page":2,"has_more":true}}`.
+- **Default cached query** does not know the total, so the trailer omits `pages`/`total` and carries only `{"_pagination":{"page":1,"next_page":2,"has_more":true}}`. `has_more` is the canonical signal.
 
 ---
 
@@ -538,7 +564,28 @@ Pagination trailer (same `_pagination` shape as search; `pages` and `total` are 
 Commands: `jiracli sprint show <id> [--json]`, `jiracli sprint current --board <id> [--json]`
 
 `sprint show`: single `Sprint` object (same shape as sprint list above).
-`sprint current`: emits the `Sprint` object first, then one `SearchIssueRecord` per issue (same shape as search), then an optional `_pagination` trailer.
+
+`sprint current`: a **single composite object** — "the current sprint and its issues" is one logical record, so it is not a heterogeneous stream of sprint + issue lines.
+
+```json
+{
+  "sprint":   { "id": 2001, "name": "Sprint 42", "state": "active", "originBoardId": 101 },
+  "issues":   [ { "key": "ACME-123", "summary": "...", "status": "In Progress", "...": "...same shape as search SearchIssueRecord..." } ],
+  "returned": 12,
+  "total":    18,
+  "notes":    ["multiple active sprints — using most recent: 2001 \"Sprint 42\". …"]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `sprint` | `Sprint` | The resolved current/override sprint. |
+| `issues` | `[]SearchIssueRecord` | Embedded issue list (default first 25), **after** the `--assigned` / `--exclude-done` client-side filters — identical to plain-text output. |
+| `returned` | int | Number of records in `issues` (post-filter). |
+| `total` | int | Total issues in the sprint as reported by the Agile API (pre-filter). |
+| `notes` | `[]string` | Informational lines (stale-sprint skips, ambiguity, issues-unavailable). Omitted (`omitempty`) when empty. |
+
+No pagination trailer (single-object response).
 
 ---
 

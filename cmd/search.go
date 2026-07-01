@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type SearchFlags struct {
 	Category    string
 	JQL         string // --jql: entire query as one string, bypasses arg joining
 	Time        bool   // --time: shorthand for adding timeoriginalestimate, timeestimate, timespent columns
+	CountBy     string // --count-by: aggregate matching issues by this field; replaces issue list with a count table
 }
 
 // defaultSearchFields is the default field set requested from the Jira API.
@@ -73,6 +75,17 @@ Fields reference (--fields / --fields-only):
 			if flags.JQL != "" && len(args) > 0 {
 				return fmt.Errorf("--jql and positional JQL arguments are mutually exclusive")
 			}
+			if flags.CountBy != "" {
+				switch flags.CountBy {
+				case "status", "statusCategory", "priority", "assignee", "issueType", "resolution", "project":
+					// ok
+				default:
+					return fmt.Errorf("--count-by: unsupported field %q (supported: status, statusCategory, priority, assignee, issueType, resolution, project)", flags.CountBy)
+				}
+				if flags.KeysOnly {
+					return fmt.Errorf("--count-by and --keys-only are mutually exclusive")
+				}
+			}
 			if !flags.Assigned && flags.JQL == "" && len(args) == 0 {
 				return fmt.Errorf("requires at least 1 arg (JQL), --jql <query>, or use --assigned")
 			}
@@ -102,6 +115,10 @@ Fields reference (--fields / --fields-only):
 	c.Flags().StringVar(&flags.JQL, "jql", "", "Entire JQL query as one string — bypasses positional-arg joining; safe for queries with quoted literals like text ~ \"KSP\"")
 	c.Flags().BoolVar(&flags.KeysOnly, "keys-only", false, "Print one issue key per line; ideal for piping into further commands (e.g. xargs jiracli show)")
 	c.Flags().BoolVar(&flags.Time, "time", false, "Show time-tracking columns: Estimate, Remaining, Spent (shorthand for --fields +timeoriginalestimate,+timeestimate,+timespent; ignored when --fields-only is used)")
+	c.Flags().StringVar(&flags.CountBy, "count-by", "",
+		"Aggregate matching issues by this field; replaces the issue list with a count/percent table. "+
+			"Supported: status, statusCategory, priority, assignee, issueType, resolution, project. "+
+			"Always fetches all matching issues (paginates internally); --limit and --page are ignored.")
 	return c
 }
 
@@ -145,6 +162,11 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 		}
 	} else if flags.ExcludeDone {
 		effectiveJQL = jira.DefaultOpenFilter(jql)
+	}
+
+	// --count-by: paginate to exhaustion and return a histogram table.
+	if flags.CountBy != "" {
+		return runCountBy(ctx, client, effectiveJQL, flags)
 	}
 
 	// Resolve fields — mutex check first (no I/O needed to reject).
@@ -784,4 +806,245 @@ func totalPages(total, limit int) int {
 		return 1
 	}
 	return int(math.Ceil(float64(total) / float64(limit)))
+}
+
+// ── count-by aggregation ─────────────────────────────────────────────────────
+
+// runCountBy fetches all matching issues and emits a count/percent histogram table.
+func runCountBy(ctx context.Context, client *jira.Client, effectiveJQL string, flags SearchFlags) (string, error) {
+	return countByFromRawSearch(ctx, client, effectiveJQL, flags.CountBy, flags.JSON)
+}
+
+// countByFromRawSearch pages through search results and aggregates by the chosen dimension.
+// No cap — fetches everything.
+func countByFromRawSearch(ctx context.Context, client *jira.Client, jql, dim string, asJSON bool) (string, error) {
+	const pageSize = 100
+	page := 1
+	counts := map[string]int{}
+	order := []string{}
+	total := 0
+	truncated := false
+	for {
+		resp, err := client.Search(ctx, jql, page, pageSize, countByFields(dim))
+		if err != nil {
+			if total > 0 {
+				truncated = true
+				break
+			}
+			return "", fmt.Errorf("search (count-by): %w", err)
+		}
+		for _, raw := range resp.Issues {
+			key := extractDimension(raw, dim)
+			if _, seen := counts[key]; !seen {
+				order = append(order, key)
+			}
+			counts[key]++
+			total++
+		}
+		startAt := (page-1)*pageSize + len(resp.Issues)
+		if startAt >= resp.Total || len(resp.Issues) == 0 {
+			break
+		}
+		page++
+	}
+	if total == 0 {
+		return fmt.Sprintf("no issues matched: %s\n", jql), nil
+	}
+	if asJSON {
+		return renderCountByJSON(dim, order, counts, total, jql, truncated)
+	}
+	return renderCountByPlain(dim, order, counts, total, jql, truncated), nil
+}
+
+// countByFields returns the minimal field set needed for the chosen dimension.
+func countByFields(dim string) []string {
+	switch dim {
+	case "status", "statusCategory":
+		return []string{"key", "status"}
+	case "priority":
+		return []string{"key", "priority"}
+	case "assignee":
+		return []string{"key", "assignee"}
+	case "issueType":
+		return []string{"key", "issuetype"}
+	case "resolution":
+		return []string{"key", "resolution"}
+	case "project":
+		return []string{"key", "project"}
+	}
+	return []string{"key", "status"}
+}
+
+// extractDimension pulls the dimension value from a raw issue.
+func extractDimension(raw jira.IssueRaw, dim string) string {
+	switch dim {
+	case "status":
+		return countByDefaultIfEmpty(raw.Fields.Status.Name)
+	case "statusCategory":
+		return countByDefaultIfEmpty(raw.Fields.Status.StatusCategory.Name)
+	case "priority":
+		if raw.Fields.Priority == nil {
+			return "(none)"
+		}
+		return countByDefaultIfEmpty(raw.Fields.Priority.Name)
+	case "assignee":
+		if raw.Fields.Assignee == nil {
+			return "Unassigned"
+		}
+		return countByDefaultIfEmpty(raw.Fields.Assignee.DisplayName)
+	case "issueType":
+		return countByDefaultIfEmpty(raw.Fields.IssueType.Name)
+	case "resolution":
+		if raw.Fields.Resolution == nil {
+			return "(unresolved)"
+		}
+		return countByDefaultIfEmpty(raw.Fields.Resolution.Name)
+	case "project":
+		return countByDefaultIfEmpty(raw.Fields.Project.Key)
+	}
+	return "(unknown)"
+}
+
+func countByDefaultIfEmpty(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}
+
+// countRow holds one aggregated dimension value for rendering.
+type countRow struct {
+	Label string
+	Count int
+}
+
+// statusCountRowLess orders countRows by status meaning (delegates to statusRank in rollup.go).
+func statusCountRowLess(rows []countRow, categoryMode bool) func(i, j int) bool {
+	return func(i, j int) bool {
+		ri, rj := statusRank(rows[i].Label, categoryMode), statusRank(rows[j].Label, categoryMode)
+		if ri != rj {
+			return ri < rj
+		}
+		return rows[i].Label < rows[j].Label
+	}
+}
+
+// dimensionHeader returns the display header for a dimension name.
+func dimensionHeader(dim string) string {
+	switch dim {
+	case "status":
+		return "Status"
+	case "statusCategory":
+		return "Status Category"
+	case "priority":
+		return "Priority"
+	case "assignee":
+		return "Assignee"
+	case "issueType":
+		return "Issue Type"
+	case "resolution":
+		return "Resolution"
+	case "project":
+		return "Project"
+	}
+	return "Value"
+}
+
+// renderCountByPlain emits a 3-column table: dimension value, count, percent.
+func renderCountByPlain(dim string, order []string, counts map[string]int, total int, jql string, truncated bool) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "search: %s  (count by %s)\n", jql, dim)
+	fmt.Fprintf(&sb, "total: %d issues\n\n", total)
+
+	rows := make([]countRow, 0, len(order))
+	for _, k := range order {
+		rows = append(rows, countRow{Label: k, Count: counts[k]})
+	}
+	if dim == "status" || dim == "statusCategory" {
+		sort.SliceStable(rows, statusCountRowLess(rows, dim == "statusCategory"))
+	} else {
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].Count != rows[j].Count {
+				return rows[i].Count > rows[j].Count
+			}
+			return rows[i].Label < rows[j].Label
+		})
+	}
+
+	const labelW = 24
+	const colW = 8
+	rule := strings.Repeat("─", labelW+2+colW+2+colW) + "\n"
+	fmt.Fprintf(&sb, "%-*s  %*s  %*s\n", labelW, dimensionHeader(dim), colW, "Count", colW, "Percent")
+	sb.WriteString(rule)
+	for _, r := range rows {
+		pct := 0.0
+		if total > 0 {
+			pct = float64(r.Count) / float64(total) * 100
+		}
+		fmt.Fprintf(&sb, "%-*s  %*d  %*s\n",
+			labelW, jira.TruncateString(r.Label, labelW),
+			colW, r.Count,
+			colW, fmt.Sprintf("%.1f%%", pct))
+	}
+	sb.WriteString(rule)
+	fmt.Fprintf(&sb, "%-*s  %*d  %*s\n", labelW, "Total", colW, total, colW, "100.0%")
+	if truncated {
+		sb.WriteString("\n⚠ truncated — Jira returned an error mid-paging; counts may be partial\n")
+	}
+	return sb.String()
+}
+
+// countByRecord is one aggregated dimension value in the --count-by NDJSON stream.
+type countByRecord struct {
+	Dimension string  `json:"dimension"`
+	Value     string  `json:"value"`
+	Count     int     `json:"count"`
+	Percent   float64 `json:"percent"`
+}
+
+// countByMetaTrailer is the final NDJSON line of a --count-by response. Like the
+// _pagination trailer, its sole top-level key is underscore-prefixed so consumers
+// can detect a meta line without inspecting the payload. _meta carries the
+// aggregation summary (total issues counted, the JQL, and whether paging was cut
+// short by an upstream error).
+type countByMetaTrailer struct {
+	Meta struct {
+		Total     int    `json:"total"`
+		JQL       string `json:"jql"`
+		Truncated bool   `json:"truncated"`
+	} `json:"_meta"`
+}
+
+// renderCountByJSON emits one NDJSON record per dimension value, then a _meta trailer.
+func renderCountByJSON(dim string, order []string, counts map[string]int, total int, jql string, truncated bool) (string, error) {
+	var sb strings.Builder
+	for _, k := range order {
+		pct := 0.0
+		if total > 0 {
+			pct = float64(counts[k]) / float64(total) * 100
+		}
+		rec := countByRecord{
+			Dimension: dim,
+			Value:     k,
+			Count:     counts[k],
+			Percent:   math.Round(pct*10) / 10,
+		}
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return "", fmt.Errorf("marshal count-by record: %w", err)
+		}
+		sb.Write(b)
+		sb.WriteByte('\n')
+	}
+	var meta countByMetaTrailer
+	meta.Meta.Total = total
+	meta.Meta.JQL = jql
+	meta.Meta.Truncated = truncated
+	b, err := json.Marshal(meta)
+	if err != nil {
+		return "", fmt.Errorf("marshal count-by meta trailer: %w", err)
+	}
+	sb.Write(b)
+	sb.WriteByte('\n')
+	return sb.String(), nil
 }

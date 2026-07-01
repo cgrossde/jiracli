@@ -191,9 +191,9 @@ func (c *Client) GetBoardConfig(ctx context.Context, boardID int) (BoardConfig, 
 		return BoardConfig{}, fmt.Errorf("board config: %w", MapStatus("", status, body))
 	}
 	var raw struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-		Type string `json:"type"`
+		ID     int    `json:"id"`
+		Name   string `json:"name"`
+		Type   string `json:"type"`
 		Filter struct {
 			ID string `json:"id"`
 		} `json:"filter"`
@@ -319,8 +319,11 @@ func (c *Client) ListSprints(ctx context.Context, boardID int, states []string, 
 
 // ListSprintsCached wraps ListSprints with caching.
 // Only caches well-known state combos on page 1:
-//   - states==["active","future"] → TTL 5 min
-//   - states==["closed"]         → TTL 1h
+//   - states==["active","future"] → TTLSprintsActive
+//   - states==["closed"]          → TTLSprintsClosed
+//
+// The cached entry stores isLast alongside the sprints so a cache hit reports
+// the same pagination signal as a live fetch.
 func (c *Client) ListSprintsCached(ctx context.Context, boardID int, states []string, page, limit int, store *cache.Store, noCache bool) ([]Sprint, bool, error) {
 	isActiveSet := len(states) == 2 && states[0] == "active" && states[1] == "future"
 	isClosedSet := len(states) == 1 && states[0] == "closed"
@@ -335,10 +338,18 @@ func (c *Client) ListSprintsCached(ctx context.Context, boardID int, states []st
 		cacheTTL = TTLSprintsClosed
 	}
 
+	// cachedSprints wraps the page-1 result with its isLast signal. Entries
+	// written under the old []Sprint shape fail to unmarshal here and are
+	// treated as a miss, so the cache self-heals on the next fetch.
+	type cachedSprints struct {
+		Sprints []Sprint `json:"sprints"`
+		IsLast  bool     `json:"isLast"`
+	}
+
 	if cacheKey != "" && !noCache && store != nil {
-		var sprints []Sprint
-		if err := store.Get(cacheKey, cacheTTL, &sprints); err == nil {
-			return sprints, true, nil
+		var cv cachedSprints
+		if err := store.Get(cacheKey, cacheTTL, &cv); err == nil {
+			return cv.Sprints, cv.IsLast, nil
 		}
 	}
 	sprints, isLast, err := c.ListSprints(ctx, boardID, states, page, limit)
@@ -346,7 +357,7 @@ func (c *Client) ListSprintsCached(ctx context.Context, boardID int, states []st
 		return nil, false, err
 	}
 	if cacheKey != "" && !noCache && store != nil {
-		_ = store.Put(cacheKey, sprints)
+		_ = store.Put(cacheKey, cachedSprints{Sprints: sprints, IsLast: isLast})
 	}
 	return sprints, isLast, nil
 }

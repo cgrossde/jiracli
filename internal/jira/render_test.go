@@ -242,13 +242,13 @@ func TestFormatSeconds(t *testing.T) {
 		{3660, "1h1m"},
 		{7200, "2h"},
 		{7320, "2h2m"},
-		{28800, "1d"},           // exactly 1 workday (8h)
-		{28860, "1d1m"},         // 1d + 1m (no hours component)
-		{32400, "1d1h"},         // 1d + 1h
-		{32460, "1d1h1m"},       // 1d + 1h + 1m
-		{57600, "2d"},           // 2 workdays (16h)
-		{144000, "5d"},          // 5 workdays (40h)
-		{5379840, "186d6h24m"},  // real value: 1494h24m (186*8*3600 + 6*3600 + 24*60)
+		{28800, "1d"},          // exactly 1 workday (8h)
+		{28860, "1d1m"},        // 1d + 1m (no hours component)
+		{32400, "1d1h"},        // 1d + 1h
+		{32460, "1d1h1m"},      // 1d + 1h + 1m
+		{57600, "2d"},          // 2 workdays (16h)
+		{144000, "5d"},         // 5 workdays (40h)
+		{5379840, "186d6h24m"}, // real value: 1494h24m (186*8*3600 + 6*3600 + 24*60)
 	}
 	for _, tc := range tests {
 		got := FormatSeconds(tc.secs)
@@ -321,6 +321,7 @@ func TestFormatProgressBar(t *testing.T) {
 		t.Errorf("red-budget bar should contain red code, got %q", barRed)
 	}
 }
+
 // ── CommonRunePrefix ─────────────────────────────────────────────────────────
 
 func TestCommonRunePrefix(t *testing.T) {
@@ -355,11 +356,11 @@ func TestCommonRunePrefix(t *testing.T) {
 
 func TestTruncateMidPrefix(t *testing.T) {
 	tests := []struct {
-		name        string
-		s           string
-		width       int
-		prefixKeep  int
-		want        string
+		name       string
+		s          string
+		width      int
+		prefixKeep int
+		want       string
 	}{
 		{
 			name:       "fits in width — no elision",
@@ -369,7 +370,7 @@ func TestTruncateMidPrefix(t *testing.T) {
 			want:       "short",
 		},
 		{
-			name:       "basic mid-elide",
+			name: "basic mid-elide",
 			// tailWidth = 20-10-1 = 9; last 9 of "...understand B" = "erstand B"
 			s:          "Widget (Dashboard): Help users understand B",
 			width:      20,
@@ -377,7 +378,7 @@ func TestTruncateMidPrefix(t *testing.T) {
 			want:       "Widget (Da…erstand B",
 		},
 		{
-			name:       "tail fills remaining space",
+			name: "tail fills remaining space",
 			// tailWidth = 15-5-1 = 9; last 9 of "Hello beautiful world wide" = "orld wide"
 			s:          "Hello beautiful world wide",
 			width:      15,
@@ -392,7 +393,7 @@ func TestTruncateMidPrefix(t *testing.T) {
 			want:       "Hello beau…",
 		},
 		{
-			name:       "unicode prefix and tail preserved",
+			name: "unicode prefix and tail preserved",
 			// tailWidth = 8-3-1 = 4; last 4 of "1234567890" = "7890"
 			s:          "日本語テスト追記1234567890",
 			width:      8,

@@ -132,6 +132,7 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio/StoryPoints/Sprint populate.
 		for _, fid := range []string{
 			entry.Hierarchy.EpicLinkField,
+			entry.Hierarchy.ParentLinkField,
 			entry.Hierarchy.PortfolioField,
 			entry.Hierarchy.StoryPointsField,
 			entry.Agile.SprintField,
@@ -459,6 +460,20 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 
+	// Components, Labels, Fix Versions — displayed right after the dates block.
+	if len(rec.Components) > 0 || len(rec.Labels) > 0 || len(rec.FixVersions) > 0 {
+		if len(rec.Components) > 0 {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Components:"), strings.Join(rec.Components, ", "))
+		}
+		if len(rec.Labels) > 0 {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Labels:"), strings.Join(rec.Labels, ", "))
+		}
+		if len(rec.FixVersions) > 0 {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Fix Versions:"), strings.Join(rec.FixVersions, ", "))
+		}
+		sb.WriteByte('\n')
+	}
+
 	// Estimates / Time tracking block
 	showTT := fieldIn(fieldSet, "timetracking")
 	showSP := spField == "" || fieldIn(fieldSet, spField)
@@ -489,12 +504,21 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 
-	// Epic / Parent
+	// Portfolio / Epic / Parent — top-down hierarchy order: Initiative → Epic → Parent
+	if rec.Portfolio != nil {
+		if rec.Portfolio.Summary != "" {
+			fmt.Fprintf(&sb, "%s %s  \"%s\"  (%s)\n", sectionLabel("Portfolio:"), rec.Portfolio.Key, rec.Portfolio.Summary, rec.Portfolio.Status)
+		} else {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Portfolio:"), rec.Portfolio.Key)
+		}
+		fmt.Fprintf(&sb, "  → jiracli show hierarchy %s\n", rec.Key)
+		sb.WriteByte('\n')
+	}
 	if rec.Epic != nil {
 		if rec.Epic.Summary != "" && rec.Epic.Status != "" {
-			fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary, rec.Epic.Status)
+			fmt.Fprintf(&sb, "%s %s  \"%s\"  (%s)\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary, rec.Epic.Status)
 		} else if rec.Epic.Summary != "" {
-			fmt.Fprintf(&sb, "%s %s  %q\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary)
+			fmt.Fprintf(&sb, "%s %s  \"%s\"\n", sectionLabel("Epic:"), rec.Epic.Key, rec.Epic.Summary)
 		} else {
 			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Epic:"), rec.Epic.Key)
 		}
@@ -502,21 +526,12 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	}
 	if rec.Parent != nil {
 		if rec.Parent.Summary != "" && rec.Parent.Status != "" {
-			fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary, rec.Parent.Status)
+			fmt.Fprintf(&sb, "%s %s  \"%s\"  (%s)\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary, rec.Parent.Status)
 		} else if rec.Parent.Summary != "" {
-			fmt.Fprintf(&sb, "%s %s  %q\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary)
+			fmt.Fprintf(&sb, "%s %s  \"%s\"\n", sectionLabel("Parent:"), rec.Parent.Key, rec.Parent.Summary)
 		} else {
 			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Parent:"), rec.Parent.Key)
 		}
-		sb.WriteByte('\n')
-	}
-	if rec.Portfolio != nil {
-		if rec.Portfolio.Summary != "" {
-			fmt.Fprintf(&sb, "%s %s  %q  (%s)\n", sectionLabel("Portfolio:"), rec.Portfolio.Key, rec.Portfolio.Summary, rec.Portfolio.Status)
-		} else {
-			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Portfolio:"), rec.Portfolio.Key)
-		}
-		fmt.Fprintf(&sb, "  → jiracli show hierarchy %s\n", rec.Key)
 		sb.WriteByte('\n')
 	}
 
@@ -541,16 +556,6 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 
-	// Fix versions & Labels
-	if len(rec.FixVersions) > 0 {
-		fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Fix Versions:"), strings.Join(rec.FixVersions, ", "))
-	}
-	if len(rec.Labels) > 0 {
-		fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Labels:"), strings.Join(rec.Labels, ", "))
-	}
-	if len(rec.FixVersions) > 0 || len(rec.Labels) > 0 {
-		sb.WriteByte('\n')
-	}
 
 	// Description
 	if rec.Description != "" {
@@ -570,7 +575,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 			if l.ID != "" {
 				id = fmt.Sprintf("(id: %s)", l.ID)
 			}
-			coloredStatus := colorStatusName(l.Issue.Status)
+			coloredStatus := jira.ColorStatusCategory(l.Issue.StatusCategory, l.Issue.Status, clr)
 			// Pad the status column by visible width (strip ANSI for measurement).
 			statusVis := len([]rune(jira.TruncateString(l.Issue.Status, 14)))
 			statusPadded := coloredStatus + strings.Repeat(" ", max(0, 14-statusVis))
@@ -595,14 +600,9 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 
-	// Components & Resolution
-	if len(rec.Components) > 0 {
-		fmt.Fprintf(&sb, "Components: %s\n", strings.Join(rec.Components, ", "))
-	}
+	// Resolution
 	if rec.Resolution != nil {
-		fmt.Fprintf(&sb, "Resolution: %s\n", *rec.Resolution)
-	}
-	if len(rec.Components) > 0 || rec.Resolution != nil {
+		fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Resolution:"), *rec.Resolution)
 		sb.WriteByte('\n')
 	}
 
@@ -622,7 +622,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	const childrenDisplayLimit = 15
 	if !flags.NoChildren {
 		if rec.ChildrenError != "" {
-			fmt.Fprintf(&sb, "Children: (could not fetch — %s)\n\n", rec.ChildrenError)
+			fmt.Fprintf(&sb, "%s (could not fetch — %s)\n\n", sectionLabel("Children:"), rec.ChildrenError)
 		} else if len(rec.Children) > 0 {
 			sorted := make([]jira.ChildIssueRecord, len(rec.Children))
 			copy(sorted, rec.Children)
@@ -649,7 +649,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 					assignee = "__Unassigned"
 				}
 				chTypeBadge := colorIssueType(ch.IssueType)
-				chStatus := colorStatusName(ch.Status)
+				chStatus := jira.ColorStatusCategory(ch.StatusCategory, ch.Status, clr)
 				// Align: key 12, status 14 visible, assignee 20, summary quoted
 				statusVis := len([]rune(jira.TruncateString(ch.Status, 14)))
 				statusPadded := chStatus + strings.Repeat(" ", max(0, 14-statusVis))
@@ -667,7 +667,7 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 			fmt.Fprintf(&sb, "  → jiracli search %q\n", childJQL)
 			sb.WriteByte('\n')
 		} else {
-			sb.WriteString("Children: (none)\n\n")
+			fmt.Fprintf(&sb, "%s (none)\n\n", sectionLabel("Children:"))
 		}
 	}
 

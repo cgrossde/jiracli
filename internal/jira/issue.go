@@ -160,6 +160,10 @@ type IssueRaw struct {
 			RemainingEstimateSeconds int64 `json:"remainingEstimateSeconds"`
 			TimeSpentSeconds         int64 `json:"timeSpentSeconds"`
 		} `json:"timetracking"`
+		Project struct {
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"project"`
 	} `json:"fields"`
 	// RawFields is the complete "fields" object as a key→raw-JSON map.
 	// Used to read dynamic custom fields not captured by the typed Fields struct.
@@ -496,9 +500,28 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 		}
 	}
 	// Portfolio (e.g. Initiative Link). Stored as key-only; caller may resolve summary.
+	// Primary source: dedicated Portfolio field (e.g. customfield_21607).
+	// Fallback: ParentLink (e.g. customfield_15401) — used when an Epic's parent is
+	// an Initiative. Only applied when the key isn't already claimed by rec.Epic or
+	// rec.Parent, so a Story whose ParentLink points to its Epic is unaffected.
 	if hf.Portfolio != "" {
 		if pkKey := ExtractRawKey(raw.RawFields, hf.Portfolio); pkKey != "" {
 			rec.Portfolio = &IssueSummary{Key: pkKey}
+		}
+	}
+	if rec.Portfolio == nil && hf.ParentLink != "" {
+		if pkKey := ExtractRawKey(raw.RawFields, hf.ParentLink); pkKey != "" {
+			epicKey := ""
+			if rec.Epic != nil {
+				epicKey = rec.Epic.Key
+			}
+			parentKey := ""
+			if rec.Parent != nil {
+				parentKey = rec.Parent.Key
+			}
+			if pkKey != epicKey && pkKey != parentKey {
+				rec.Portfolio = &IssueSummary{Key: pkKey}
+			}
 		}
 	}
 

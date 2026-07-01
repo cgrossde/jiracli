@@ -41,6 +41,7 @@ type RollupTree struct {
 	Nodes           []RollupNode `json:"nodes"`        // L1 children for --list; empty unless requested
 	HasDeeperLevel  bool         `json:"hasDeeperLevel"` // any L1 child has children
 	MaxFetchedDepth int          `json:"maxFetchedDepth"`
+	GroupBy         string       `json:"groupBy,omitempty"` // "", "assignee", "status", "statusCategory"
 }
 
 // ChildJQL returns the JQL to fetch direct children of key given the subject's issue type and
