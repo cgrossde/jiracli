@@ -229,9 +229,9 @@ Single object (v1 schema, additive-only):
 
 ### Errors
 
-- Missing key argument: `[stderr] issue key required`, exit 2.
-- Not found: `[stderr] issue NOPE-1 not found (HTTP 404) — check the key, or your PAT may lack browse permission on the project`, exit 1.
-- 401: `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
+- Missing key argument: `issue key required`, exit 2.
+- Not found: `issue NOPE-1 not found (HTTP 404) — check the key, or your PAT may lack browse permission on the project`, exit 1.
+- 401: `PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
 
 ### Multi-key and stdin mode
 
@@ -576,7 +576,7 @@ List sprints for a scrum board.
 
 By default (`--state` empty, no `--all`, no date filter) `sprint list` returns only **active + future sprints plus closed sprints that ended within the last 7 days** (`--closed-within N` widens the window). It fetches the full id/name/state set in one GreenHopper `sprintquery` call (cached 1 h), then scans closed sprints newest-first and hydrates their dates only until one falls outside the window — sprint id is a recency proxy, so hydration stops early. Sprints closed > 90 days ago are cached permanently (`archive`) and never refetched. `--all` (and `--state all`) return the complete history; `--after`/`--before` fetch the complete hydrated set (fixing under-reporting of the paged closed endpoint). See `docs/boards-sprints.md` for the full endpoint decision table. On a kanban board: exits 1 with corrective message:
 
-    [stderr] board 102 is kanban and does not support sprints — use: jiracli board issues 102
+    board 102 is kanban and does not support sprints — use: jiracli board issues 102
 
 ### Plain-text output
 
@@ -662,10 +662,10 @@ Show the active sprint and its issues for a scrum board.
 
 ### Behaviour
 
-- **0 active sprints** → exits 1: `[stderr] no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future`
+- **0 active sprints** → exits 1: `no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future`
 - **1 active sprint** → renders sprint detail (`sprint show` format) followed by up to 25 issues (`sprint issues` format). When total > 25, appends `→ jiracli sprint issues 2001 --limit 100`.
 - **>1 active sprints** → exits 1, lists each sprint with drill-down hints.
-- **Kanban board** → exits 1: `[stderr] board 102 is kanban and does not support sprints — use: jiracli board issues 102`
+- **Kanban board** → exits 1: `board 102 is kanban and does not support sprints — use: jiracli board issues 102`
 
 ### JSON mode
 
@@ -1002,8 +1002,8 @@ Field notes:
 
 ### Errors
 
-- Hierarchy not configured: `[stderr] hierarchy not configured for profile "default" — run: jiracli setup --reconfigure`, exit 1.
-- Non-issue ref: `[stderr] hierarchy requires a plain issue key — got "ACME-123:comment:9421"`, exit 1.
+- Hierarchy not configured: `hierarchy not configured for profile "default" — run: jiracli setup --reconfigure`, exit 1.
+- Non-issue ref: `hierarchy requires a plain issue key — got "ACME-123:comment:9421"`, exit 1.
 
 ---
 
@@ -1052,7 +1052,7 @@ The `--exclude-done` / `--open` / `--state` filter vocabulary is shared with `ji
 
 **Truncation is an error, not a silent partial.** Because effort reports aggregated totals, a partial fetch would produce misleading numbers. When more issues match than the `--limit` cap fetched (and `--all` was not passed), the command aborts non-zero rather than aggregating a truncated set:
 
-    [stderr] effort aggregation incomplete: 1917 issues matched but only 100 were fetched — partial totals would be misleading. Re-run with --all to aggregate every issue, or raise the cap with --limit 1917
+    effort aggregation incomplete: 1917 issues matched but only 100 were fetched — partial totals would be misleading. Re-run with --all to aggregate every issue, or raise the cap with --limit 1917
 
 This applies to every mode (`<KEY>` hierarchy levels, `jql`, and `sprint`).
 
@@ -1269,9 +1269,9 @@ Rows are sorted by `Planned` desc, then `Spent` desc, then name asc. The final `
 
 ### Errors
 
-- Hierarchy not configured: `[stderr] hierarchy fields not configured for profile "X" — run: jiracli config hierarchy --rediscover`, exit 1.
+- Hierarchy not configured: `hierarchy fields not configured for profile "X" — run: jiracli config hierarchy --rediscover`, exit 1.
 - No children: `KEY has no children — nothing to roll up.`, exit 0.
-- Invalid ref: `[stderr] effort requires a plain issue key — got "<input>"`, exit 1.
+- Invalid ref: `effort requires a plain issue key — got "<input>"`, exit 1.
 
 ---
 
@@ -1328,7 +1328,7 @@ The default path is deterministic and agent-grepable: `/tmp/jiracli-attach/<id>-
 
 ### Errors
 
-- Invalid ref form: `[stderr] <input> is not a valid attachment reference — expected <KEY>:attach:<id>`
+- Invalid ref form: `<input> is not a valid attachment reference — expected <KEY>:attach:<id>`
 - Not found (HTTP 404): corrective message naming the issue key and suggesting `jiracli show attachments <KEY>`.
 
 ---
@@ -1356,7 +1356,7 @@ No `--json` flag.
 | `ACME-123:comment:9421` | `<baseURL>/browse/ACME-123?focusedCommentId=9421&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel` |
 | `ACME-123:attach:11001` | `<baseURL>/secure/attachment/11001/<url-encoded-filename>` (fetches attachment metadata first to resolve the filename) |
 
-Browser: `open` on macOS, `xdg-open` on Linux. On other OS: prints the URL to stdout with `[stderr] cannot auto-open on this OS — copy the URL above`.
+Browser: `open` on macOS, `xdg-open` on Linux. On other OS: prints the URL to stdout with `cannot auto-open on this OS — copy the URL above`.
 
 ### Pagination and overflow
 

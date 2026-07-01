@@ -84,8 +84,8 @@ Body must be non-empty; empty body is a hard error.
 
 ### Errors
 
-- Issue not found: `[stderr] issue ACME-123 not found — check the key or your PAT may lack browse permission on the project`
-- 401: `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`
+- Issue not found: `issue ACME-123 not found — check the key or your PAT may lack browse permission on the project`
+- 401: `PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`
 
 ---
 
@@ -120,7 +120,7 @@ Moves an issue to a new status via a workflow transition.
 ### Errors
 
 ```
-[stderr] no transition matching "dun" on ACME-123.
+no transition matching "dun" on ACME-123.
         Available transitions:
           21  In Review
           31  Done
@@ -189,7 +189,7 @@ or, when unassigning:
 ### Errors
 
 ```
-[stderr] could not resolve assignee "sam" — 3 matches:
+could not resolve assignee "sam" — 3 matches:
         u2  Sam Patel        (active)
         u4  Samuel Diaz      (active)
         u9  Samantha Wright  (inactive)
@@ -303,7 +303,7 @@ Priorities, link types, and assignees have no `--allow-new` override.
 ### Errors
 
 ```
-[stderr] label "reggression" is not used in project ACME.
+label "reggression" is not used in project ACME.
         Did you mean: regression, regression-suite, regr-mobile
         Search:  jiracli lookup labels reggression --project ACME
         Force:   re-run with --allow-new   (uses it as-is)
@@ -311,7 +311,7 @@ Priorities, link types, and assignees have no `--allow-new` override.
 ```
 
 ```
-[stderr] component "AuthServce" not found in project WEB.
+component "AuthServce" not found in project WEB.
         Search:  jiracli lookup components AuthServce --project WEB
         List:    jiracli lookup components --project WEB
         Force:   re-run with --allow-new   (creates it)
@@ -319,7 +319,7 @@ Priorities, link types, and assignees have no `--allow-new` override.
 ```
 
 ```
-[stderr] version "4.5.0" does not exist in project WEB.
+version "4.5.0" does not exist in project WEB.
         Search:  jiracli lookup versions 4.5 --project WEB
         List:    jiracli lookup versions --project WEB --unreleased
         Force:   re-run with --allow-new
@@ -327,7 +327,7 @@ Priorities, link types, and assignees have no `--allow-new` override.
 ```
 
 ```
-[stderr] unknown priority "High" for project WEB
+unknown priority "High" for project WEB
         Available: 1 - Very High, 2 - High, 3 - Medium, 4 - Low
         Run: jiracli lookup priorities --project WEB
         Did you mean: 1 - Very High, 2 - High?
@@ -422,11 +422,11 @@ All keys are moved in a single POST. Partial failures (Jira returns per-key erro
 
 ### Errors
 
-- Invalid key: `[stderr] not a valid issue key: "bad-key"`
-- Closed sprint: `[stderr] cannot move issues into closed sprint 2001 (Sprint 41)`
-- Missing `--board` for `current`/`next`: `[stderr] --board required for target "current"`
-- Kanban board: `[stderr] board 102 is kanban and does not support sprints`
-- No active sprint: `[stderr] no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future`
+- Invalid key: `not a valid issue key: "bad-key"`
+- Closed sprint: `cannot move issues into closed sprint 2001 (Sprint 41)`
+- Missing `--board` for `current`/`next`: `--board required for target "current"`
+- Kanban board: `board 102 is kanban and does not support sprints`
+- No active sprint: `no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future`
 
 ---
 
@@ -516,7 +516,7 @@ Required fields are resolved from `GET /issue/createmeta/<KEY>/issuetypes/<typeI
 ### Errors
 
 ```
-[stderr] component "AuthServce" not found in project WEB.
+component "AuthServce" not found in project WEB.
         Search:  jiracli lookup components AuthServce --project WEB
         List:    jiracli lookup components --project WEB
         Force:   re-run with --allow-new   (creates it)
@@ -555,7 +555,7 @@ Both issues are validated with cheap `GET /issue/<KEY>?fields=key` calls (run in
 ### Errors
 
 ```
-[stderr] link type "Causes" not found on this instance.
+link type "Causes" not found on this instance.
         List:    jiracli lookup link-types
 [exit:1 | Xms]
 ```
@@ -600,7 +600,7 @@ One line per uploaded file, then a drill-down:
 
 ### Errors
 
-- File not found: `[stderr] file "screenshot.png" not found or not readable`
-- Issue not found: `[stderr] issue ACME-123 not found`
+- File not found: `file "screenshot.png" not found or not readable`
+- Issue not found: `issue ACME-123 not found`
 - 403 (attachment upload requires project write permission): server error surfaced verbatim.
 

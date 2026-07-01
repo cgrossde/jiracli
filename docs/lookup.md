@@ -127,7 +127,7 @@ Lists components for a project.
 | `--no-cache` | Bypass 1h project cache |
 | `--json` | NDJSON output |
 
-`--project` is required. Without it: `[stderr] --project required — run: jiracli lookup projects`
+`--project` is required. Without it: `--project required — run: jiracli lookup projects`
 
 Reads `GET /project/<KEY>`, filters `.components[]` by name prefix in Go.
 
@@ -280,7 +280,7 @@ Duplicates                 (inward: is duplicated by / outward: duplicates)
 
 ### Errors
 
-- Unknown type in `link --type` → `[stderr] link type "Causes" not found on this instance. List: jiracli lookup link-types`
+- Unknown type in `link --type` → `link type "Causes" not found on this instance. List: jiracli lookup link-types`
 
 ---
 
@@ -353,7 +353,7 @@ One priority name per line. The list is ordered as the scheme defines.
 
 ### Errors
 
-- Unknown priority in `field set` or `create` → `[stderr] priority "Critical" is not in the WEB priority scheme. Available: High, Medium, Low. List: jiracli lookup priorities --project WEB`
+- Unknown priority in `field set` or `create` → `priority "Critical" is not in the WEB priority scheme. Available: High, Medium, Low. List: jiracli lookup priorities --project WEB`
 
 ---
 
@@ -445,7 +445,7 @@ Identical to `jiracli board list`. Both commands call `GET /rest/agile/1.0/board
 |`--no-cache`|false|Bypass 1h cache|
 |`--json`|false|NDJSON output|
 
-`--project` is required. Without it: `[stderr] --project required — run: jiracli lookup projects`
+`--project` is required. Without it: `--project required — run: jiracli lookup projects`
 
 ### Plain-text output shape
 

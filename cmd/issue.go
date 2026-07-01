@@ -75,7 +75,7 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 	// Parse the reference — accepts KEY or browse URL
 	parsed, err := jira.ParseRef(ref)
 	if err != nil {
-		return "", fmt.Errorf("%w\n[stderr] not a valid issue reference: %q — expected ACME-123 or a browse URL", err, ref)
+		return "", fmt.Errorf("%w\nnot a valid issue reference: %q — expected ACME-123 or a browse URL", err, ref)
 	}
 	if parsed.Kind != jira.RefIssue {
 		if flags.Parent {

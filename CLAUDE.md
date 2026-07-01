@@ -79,12 +79,13 @@ Every command writes to stdout with a trailing footer:
 [exit:0 | 12ms]
 ```
 
-On failure, stderr is always included:
+On failure, the error is written to stderr; stdout gets only the footer:
 
 ```
-[stdout if any]
-[stderr] reason here
+stdout: [stdout if any]
 [exit:1 | 3ms]
+
+stderr: reason here
 ```
 
 ### Errors & usage

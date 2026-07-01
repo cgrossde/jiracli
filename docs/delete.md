@@ -56,8 +56,8 @@ Fetches the comment via `GET /issue/<KEY>/comment/<id>` before showing the previ
 
 ### Errors
 
-- Comment not found: `[stderr] comment 9421 on ACME-123 not found` (from `✗` validation row), exit 1.
-- 401: `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`
+- Comment not found: `comment 9421 on ACME-123 not found` (from `✗` validation row), exit 1.
+- 401: `PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`
 
 ---
 
@@ -79,7 +79,7 @@ Fetches attachment metadata via `GET /attachment/<id>` before showing the previe
 
 ### Errors
 
-- Attachment not found: `[stderr] attachment 10042 on ACME-123 not found` (from `✗` validation row), exit 1.
+- Attachment not found: `attachment 10042 on ACME-123 not found` (from `✗` validation row), exit 1.
 
 ---
 
@@ -113,7 +113,7 @@ Delete multiple issues in one command:
 All keys are validated before any delete is executed. If any key is not found or has subtasks (without `--with-subtasks`), the entire operation is blocked:
 
 ```
-[stderr] cannot proceed — resolve the following first:
+cannot proceed — resolve the following first:
   ACME-124 not found
   ACME-125 has 2 subtask(s) — pass --with-subtasks to cascade
 [exit:1 | Xms]
@@ -173,6 +173,6 @@ With `--with-subtasks` and N subtasks:
 
 ### Errors
 
-- Issue has subtasks and `--with-subtasks` not set: `[stderr] ACME-123 has 3 subtask(s) — pass --with-subtasks to cascade`, exit 1.
-- Issue not found: `[stderr] ACME-123 not found`, exit 1.
-- Apply fails: `[stderr] apply failed: <server error>`, exit 1.
+- Issue has subtasks and `--with-subtasks` not set: `ACME-123 has 3 subtask(s) — pass --with-subtasks to cascade`, exit 1.
+- Issue not found: `ACME-123 not found`, exit 1.
+- Apply fails: `apply failed: <server error>`, exit 1.

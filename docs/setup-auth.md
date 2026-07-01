@@ -97,8 +97,8 @@ Service `jiracli`, account = profile name. Stored as JSON:
 
 ### Errors
 
-- `[stderr] PAT in keychain for profile "default" was rejected (HTTP 401) — run: jiracli auth reauth`
-- `[stderr] no credentials found — run: jiracli setup`
+- `PAT in keychain for profile "default" was rejected (HTTP 401) — run: jiracli auth reauth`
+- `no credentials found — run: jiracli setup`
 
 ---
 
@@ -129,8 +129,8 @@ Followed by `[exit:0 | Xms]` footer.
 
 ### Errors
 
-- `--url` absent → `[stderr] --url is required — run: jiracli auth login --url <jira-url>`
-- PAT verification fails → `[stderr] PAT verification failed: PAT in keychain for profile "default" was rejected (HTTP 401) — run: jiracli auth reauth`
+- `--url` absent → `--url is required — run: jiracli auth login --url <jira-url>`
+- PAT verification fails → `PAT verification failed: PAT in keychain for profile "default" was rejected (HTTP 401) — run: jiracli auth reauth`
 
 ---
 
@@ -151,7 +151,7 @@ Re-prompts for the PAT. URL is read from the prior entry; if no prior entry exis
 
 ### Errors
 
-- No prior entry and no `--url` → `[stderr] credentials not found for profile "X" — run: jiracli setup`
+- No prior entry and no `--url` → `credentials not found for profile "X" — run: jiracli setup`
 
 ---
 
@@ -250,8 +250,8 @@ Prints the authenticated user and credential status for the active profile. This
 
 ### Errors
 
-- No entry → `[stderr] no credentials found for profile "X" — run: jiracli setup`, exit 1.
-- 401 → `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
+- No entry → `no credentials found for profile "X" — run: jiracli setup`, exit 1.
+- 401 → `PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
 
 
 ---
@@ -309,8 +309,8 @@ jiracli config hierarchy --portfolio none
 
 ### Errors
 
-- No credentials: `[stderr] no credentials found — run: jiracli setup`, exit 1.
-- Unknown field: `[stderr] unknown field "customfield_99999" — run: jiracli lookup fields`, exit 1.
+- No credentials: `no credentials found — run: jiracli setup`, exit 1.
+- Unknown field: `unknown field "customfield_99999" — run: jiracli lookup fields`, exit 1.
 
 ---
 
@@ -361,5 +361,5 @@ jiracli config agile --field none
 
 ### Errors
 
-- No credentials: `[stderr] no credentials found — run: jiracli setup`, exit 1.
-- Unknown field: `[stderr] unknown field "X" — run: jiracli lookup fields`, exit 1.
+- No credentials: `no credentials found — run: jiracli setup`, exit 1.
+- Unknown field: `unknown field "X" — run: jiracli lookup fields`, exit 1.

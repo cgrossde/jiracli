@@ -10,7 +10,7 @@
 //   - Overflow: truncate large output and write the full content to /tmp,
 //     returning a path hint the agent can explore with grep/tail.
 //   - Metadata footer: append [exit:N | Xms] to every response.
-//   - stderr attachment: always attach stderr on non-zero exit.
+//   - stderr: errors are written to the real stderr writer, not embedded in stdout.
 package output
 
 import (
@@ -50,23 +50,13 @@ type Result struct {
 	Elapsed  time.Duration
 }
 
-// Format applies all Layer 2 mechanisms and returns the final string to
-// present to the caller (LLM agent or terminal).
+// Format applies overflow and the metadata footer to stdout. Errors are not
+// embedded here — they are written to the real stderr writer by Print.
 func Format(r Result) string {
 	var b strings.Builder
 
 	// Overflow: truncate large stdout, write full content to a temp file.
 	b.WriteString(overflow(r.Stdout))
-
-	// stderr attachment: always include on failure — callers need to know why.
-	if r.ExitCode != 0 && strings.TrimSpace(r.Stderr) != "" {
-		if !strings.HasSuffix(b.String(), "\n") {
-			b.WriteByte('\n')
-		}
-		b.WriteString("[stderr] ")
-		b.WriteString(strings.TrimRight(r.Stderr, "\n"))
-		b.WriteByte('\n')
-	}
 
 	// Metadata footer: exit code + duration, always present.
 	fmt.Fprintf(&b, "[exit:%d | %s]\n", r.ExitCode, formatDuration(r.Elapsed))
@@ -74,8 +64,8 @@ func Format(r Result) string {
 	return b.String()
 }
 
-// Print writes the formatted result: stdout (with footer) to stdout, and
-// stderr content (when non-empty and exit != 0) to the real stderr writer.
+// Print writes the formatted stdout (with footer) to stdout, and any error
+// message to the real stderr writer on non-zero exit.
 func Print(stdout, stderr io.Writer, r Result) {
 	fmt.Fprint(stdout, Format(r))
 	if r.ExitCode != 0 && strings.TrimSpace(r.Stderr) != "" {

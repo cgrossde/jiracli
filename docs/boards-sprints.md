@@ -34,7 +34,7 @@ Both forms are identical. `board list` is the canonical name; `lookup boards` is
 `--project` is required. Without it the Agile board endpoint returns the full instance list, which is too noisy. If omitted:
 
 ```
-[stderr] --project required — run: jiracli lookup projects
+--project required — run: jiracli lookup projects
 [exit:1 | Xms]
 ```
 
@@ -85,9 +85,9 @@ When more pages exist, a pagination trailer is appended as the final line:
 
 ### Errors
 
-- No `--project`: `[stderr] --project required — run: jiracli lookup projects`, exit 1.
-- Not found / no boards: `[stderr] no boards found for project ACME`, exit 1.
-- 401: `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
+- No `--project`: `--project required — run: jiracli lookup projects`, exit 1.
+- Not found / no boards: `no boards found for project ACME`, exit 1.
+- 401: `PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
 
 ---
 
@@ -175,8 +175,8 @@ Single object:
 ### Errors
 
 - Ambiguous name (multiple boards match): error listing each candidate with `--board <id>` hints, exit 1.
-- `--project` missing when resolving by name: `[stderr] --project required for name resolution — use a numeric board id or add --project <KEY>`, exit 1.
-- Board not found: `[stderr] board 999 not found`, exit 1.
+- `--project` missing when resolving by name: `--project required for name resolution — use a numeric board id or add --project <KEY>`, exit 1.
+- Board not found: `board 999 not found`, exit 1.
 
 ---
 
@@ -235,8 +235,8 @@ Issues emit in the same schema as `search --json`. Pagination trailer when more 
 
 ### Errors
 
-- Invalid (non-numeric) ID: `[stderr] board id must be numeric`, exit 2.
-- Board not found: `[stderr] board 999 not found`, exit 1.
+- Invalid (non-numeric) ID: `board id must be numeric`, exit 2.
+- Board not found: `board 999 not found`, exit 1.
 
 ---
 
@@ -245,7 +245,7 @@ Issues emit in the same schema as `search --json`. Pagination trailer when more 
 All `sprint` subcommands and the `edit sprint current/next` targets reject kanban boards at runtime. When a board is kanban, the Agile API returns HTTP 400 with `"The board doesn't support sprints."` The CLI maps this to:
 
 ```
-[stderr] board 102 is kanban and does not support sprints — use: jiracli board issues 102
+board 102 is kanban and does not support sprints — use: jiracli board issues 102
 [exit:1 | Xms]
 ```
 
@@ -341,9 +341,9 @@ working set and report real figures:
 
 ### Errors
 
-- `--board` missing: `[stderr] --board required`, exit 2.
+- `--board` missing: `--board required`, exit 2.
 - Kanban board: [see Kanban restriction](#kanban-restriction).
-- Board not found: `[stderr] board 999 not found`, exit 1.
+- Board not found: `board 999 not found`, exit 1.
 
 ---
 
@@ -398,8 +398,8 @@ Drill in:
 
 ### Errors
 
-- Non-numeric ID: `[stderr] sprint id must be numeric`, exit 2.
-- Sprint not found: `[stderr] sprint 9999 not found`, exit 1.
+- Non-numeric ID: `sprint id must be numeric`, exit 2.
+- Sprint not found: `sprint 9999 not found`, exit 1.
 
 ---
 
@@ -458,8 +458,8 @@ Same schema as `search --json`. Pagination trailer appended on the last line whe
 
 ### Errors
 
-- Non-numeric ID: `[stderr] sprint id must be numeric`, exit 2.
-- Sprint not found: `[stderr] sprint 9999 not found`, exit 1.
+- Non-numeric ID: `sprint id must be numeric`, exit 2.
+- Sprint not found: `sprint 9999 not found`, exit 1.
 
 ---
 
@@ -530,14 +530,14 @@ A single composite object — "the current sprint and its issues" is one logical
 **No active sprint:**
 
 ```
-[stderr] no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future
+no active sprint for board 101 — list options with: jiracli sprint list --board 101 --state future
 [exit:1 | Xms]
 ```
 
 **Multiple active sprints:**
 
 ```
-[stderr] board 101 has 2 active sprints — run one of:
+board 101 has 2 active sprints — run one of:
          jiracli sprint show 2001   OR   jiracli sprint issues 2001   (Sprint 42)
          jiracli sprint show 2002   OR   jiracli sprint issues 2002   (Sprint 43)
 [exit:1 | Xms]
@@ -677,10 +677,10 @@ All successfully moved keys are still reported.
 
 ### Errors
 
-- Invalid issue key: `[stderr] not a valid issue key: "foobar"`, exit 2.
-- `--board` missing for `current`/`next`: `[stderr] --board required for target "current"`, exit 2.
-- Closed sprint (numeric target): `[stderr] cannot move issues into closed sprint 2001`, exit 1.
-- Sprint not found: `[stderr] sprint 9999 not found`, exit 1.
+- Invalid issue key: `not a valid issue key: "foobar"`, exit 2.
+- `--board` missing for `current`/`next`: `--board required for target "current"`, exit 2.
+- Closed sprint (numeric target): `cannot move issues into closed sprint 2001`, exit 1.
+- Sprint not found: `sprint 9999 not found`, exit 1.
 - Kanban board (for `current`/`next`): see [Kanban restriction](#kanban-restriction).
 
 ### Examples
@@ -794,9 +794,9 @@ jiracli search --jql 'project = ACME' --fields sprint
 
 ### Errors
 
-- `--field` and `--rediscover` are mutually exclusive: `[stderr] --field and --rediscover are mutually exclusive`, exit 2.
-- Unknown field ID: `[stderr] field "customfield_99999" not found — run: jiracli lookup fields --custom`, exit 1.
-- 401: `[stderr] PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
+- `--field` and `--rediscover` are mutually exclusive: `--field and --rediscover are mutually exclusive`, exit 2.
+- Unknown field ID: `field "customfield_99999" not found — run: jiracli lookup fields --custom`, exit 1.
+- 401: `PAT in keychain for profile "X" was rejected (HTTP 401) — run: jiracli auth reauth`, exit 1.
 
 ---
 

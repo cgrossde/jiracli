@@ -101,30 +101,31 @@ The footer is **always present**, including on success. The agent internalises t
 
 The footer is suppressed in JSON mode (`--json`) because it would corrupt the NDJSON stream.
 
-### Mechanism C: stderr Attachment
+### Mechanism C: stderr
 
-On any non-zero exit:
+On any non-zero exit, the error message is written to the real stderr stream. stdout contains only the command's output (if any) and the footer.
 
 ```
+stdout:
 [stdout content if any]
-[stderr] reason for failure here
 [exit:1 | 3ms]
+
+stderr:
+reason for failure here
 ```
 
-**Never drop stderr.** The most common mistake is discarding stderr when stdout has content. This is catastrophically wrong for agents: the agent receives "it failed" with no information about why, and retries blindly.
-
-Errors must be self-contained and corrective. Include the exact command the agent should run to recover:
+**Never drop stderr.** Errors must be self-contained and corrective. Include the exact command the agent should run to recover:
 
 ```
-[stderr] credentials not found for profile "prod" — run: jiracli auth login
-[exit:1 | 2ms]
+credentials not found for profile "prod" — run: jiracli auth login
 ```
 
 ### Mechanism D: Help on Error
 
-When a wrapped command's `RunE` returns a non-nil error, `WrapWithPresenter` emits the command's help text before the error block:
+When a wrapped command's `RunE` returns a non-nil error, `WrapWithPresenter` emits the command's help text to stdout before the footer, and the error to stderr:
 
 ```
+stdout:
 Usage:
   jiracli hello [flags]
 
@@ -133,12 +134,13 @@ Flags:
   --json             Output NDJSON
   ...
 
-[stderr] credentials not found for profile "prod" — run: jiracli auth login
 [exit:1 | 2ms]
+
+stderr:
+credentials not found for profile "prod" — run: jiracli auth login
 ```
 
 No-arg or bad-arg invocations are always self-documenting. The caller never needs to separately invoke `--help` to understand what went wrong.
-
 ---
 
 ## Output Modes
