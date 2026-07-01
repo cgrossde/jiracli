@@ -210,6 +210,18 @@ func Comments(ctx context.Context, flags CommentsFlags, key string) (string, err
 	}
 
 	// Plain text.
+	// Friendly empty-state, consistent with "show attachments".
+	if len(comments) == 0 {
+		if total == 0 {
+			return fmt.Sprintf("%s has no comments.\n", key), nil
+		}
+		if flags.Since != "" {
+			return fmt.Sprintf("%s has no comments on or after %s.\n", key, flags.Since), nil
+		}
+		// Non-empty thread but this page is past the end — fall through to the
+		// pagination footer below so the page numbers are still shown.
+	}
+
 	var sb strings.Builder
 	for i, c := range comments {
 		n := startAt + i + 1

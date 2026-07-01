@@ -779,6 +779,30 @@ func parseSprintRaw(raw json.RawMessage) []SprintRef {
 	return refs
 }
 
+// FormatSprintField renders a raw sprint custom-field value as a compact,
+// human-readable one-line string, e.g. "Sprint 152, Sprint 153 (active)".
+// It handles both the modern JSON-object array and the legacy GreenHopper
+// toString array. Returns "" when the value is empty or unparseable, so callers
+// can fall back to their own empty-value handling.
+func FormatSprintField(raw json.RawMessage) string {
+	refs := parseSprintRaw(raw)
+	if len(refs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(refs))
+	for _, r := range refs {
+		name := r.Name
+		if name == "" {
+			name = fmt.Sprintf("sprint %d", r.ID)
+		}
+		if r.State == "active" {
+			name += " (active)"
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // ResolveActivityStatusCategories fills the FromCategory and ToCategory fields
 // of every status-field change in the activity timeline by matching the status
 // display name against the provided status list.

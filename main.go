@@ -57,19 +57,25 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	// All other errors (missing flags, unknown commands, etc.) go through
-	// the presenter so output is always structured.
+	// Errors that reach here come from Cobra's own validation (flag parse
+	// errors, arg-count validation) — i.e. the user invoked the command wrong.
+	// Runtime errors from RunE are presented inside WrapWithPresenter and never
+	// reach this point (they return ErrAlreadyPresented, handled above).
 	//
-	// When a command was invoked with no positional args and failed *because*
-	// a required arg is missing, show the full help (description + usage +
-	// flags) instead of the terse usage block — the description is the most
-	// useful thing to surface when someone types a bare command to discover it.
+	// Two shapes of user error:
+	//   - Invoked with no positional args because a required arg is missing:
+	//     show the full help (description + usage + flags) — the description is
+	//     the most useful thing to surface when someone types a bare command to
+	//     discover it.
+	//   - Invoked with the wrong argument/flag: show the terse usage block and
+	//     point at --help for the full reference.
 	usageStr := ""
 	if found, _, findErr := root.Find(args); findErr == nil && found != nil {
 		if isMissingRequiredArgErr(found, err) {
 			usageStr = renderHelp(found)
 		} else {
-			usageStr = found.UsageString()
+			usageStr = found.UsageString() +
+				fmt.Sprintf("\nRun '%s --help' for more details.\n", found.CommandPath())
 		}
 	}
 	output.Print(stdout, stderr, output.Result{
@@ -166,8 +172,12 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(hierarchyCmd)
 
 	// effort — aggregate time + story points across a hierarchy or result set.
+	// The top-level command has its own RunE (effort <KEY>) and two subcommands
+	// (jql, sprint); wrap all three so every path gets the presenter footer,
+	// overflow handling, and runtime-error presentation.
 	effortCmd := jiracmd.NewEffortCmd()
 	WrapWithPresenter(effortCmd, stdout, stderr)
+	wrapGroup(effortCmd)
 	effortCmd.GroupID = "main"
 	root.AddCommand(effortCmd)
 
@@ -266,9 +276,13 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 // that to a buffer, help would be swallowed. We override HelpFunc to write
 // directly to finalOut so --help always reaches the caller.
 //
-// Error path: when RunE returns a non-nil error, help is emitted first, then
-// a blank line, then the [stderr] error and the [exit:1] footer. This means
-// no-arg or bad-arg invocations are always self-documenting.
+// Error path: when RunE returns a non-nil error, only the [stderr] error and
+// the [exit:1] footer are emitted — runtime API errors (issue not found,
+// forbidden, network) must NOT dump the command's help. The sole exception is a
+// completely bare invocation (no positional args and no flags set), which is
+// treated as a discovery attempt and answered with the full help. Arg-count and
+// flag-parse errors are validated by Cobra before RunE runs and are handled in
+// run() instead.
 func WrapWithPresenter(c *cobra.Command, finalOut io.Writer, finalErr io.Writer) {
 	original := c.RunE
 	if original == nil {
@@ -324,9 +338,14 @@ func WrapWithPresenter(c *cobra.Command, finalOut io.Writer, finalErr io.Writer)
 		if err != nil {
 			exitCode = 1
 			stderrStr = err.Error()
-			// Emit help before the error block so the caller knows what to supply.
-			cmd.HelpFunc()(cmd, args)
-			fmt.Fprintln(finalOut)
+			// A completely bare invocation (no positional args, no flags set) is
+			// a discovery attempt — emit the full help before the error. Genuine
+			// runtime errors (args or flags present) show only the corrective
+			// error, never the help dump.
+			if len(args) == 0 && cmd.Flags().NFlag() == 0 {
+				cmd.HelpFunc()(cmd, args)
+				fmt.Fprintln(finalOut)
+			}
 		}
 
 		output.Print(finalOut, finalErr, output.Result{

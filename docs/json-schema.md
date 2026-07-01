@@ -554,8 +554,8 @@ One record per sprint. Produced by `internal/jira.Sprint` (`internal/jira/agile.
 - `originBoardId`: the board this sprint was created on (may differ from the queried board when sprints are shared).
 
 Pagination trailer:
-- **Filtered/sorted queries** (`--name-contains`, `--after`, `--before`, `--sort`) page over the full sprint set client-side and report real figures: `{"_pagination":{"page":1,"pages":3,"total":120,"next_page":2,"has_more":true}}`.
-- **Default cached query** does not know the total, so the trailer omits `pages`/`total` and carries only `{"_pagination":{"page":1,"next_page":2,"has_more":true}}`. `has_more` is the canonical signal.
+- All queries (the default recency view, `--all`, and filtered/sorted queries) page over an in-memory working set and report real figures: `{"_pagination":{"page":1,"pages":3,"total":120,"next_page":2,"has_more":true}}`.
+- `has_more` is always present and is the canonical "keep paging?" signal. No trailer is emitted on the last page.
 
 ---
 

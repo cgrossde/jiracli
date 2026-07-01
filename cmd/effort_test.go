@@ -452,3 +452,13 @@ func TestEffortQuery_InvalidState(t *testing.T) {
 		t.Errorf("expected --state validation error, got: %v", err)
 	}
 }
+
+func TestErrEffortTruncated(t *testing.T) {
+	err := errEffortTruncated(1917, 100)
+	msg := err.Error()
+	for _, want := range []string{"1917", "only 100", "--all", "--limit 1917"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("truncation error should mention %q; got: %s", want, msg)
+		}
+	}
+}

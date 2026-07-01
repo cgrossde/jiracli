@@ -27,6 +27,10 @@ const (
 	TTLBoardConfig   = 1 * time.Hour
 	TTLSprintsActive = 1 * time.Hour
 	TTLSprintsClosed = 7 * 24 * time.Hour
+	// TTLSprintArchive caches immutable closed sprints (ended > 90d ago). These
+	// records never change, so the TTL is intentionally long — effectively a
+	// permanent cache that is only rebuilt if the file is evicted or cleared.
+	TTLSprintArchive = 365 * 24 * time.Hour
 )
 
 // UserRef is a lightweight Jira user reference used in lookup results.

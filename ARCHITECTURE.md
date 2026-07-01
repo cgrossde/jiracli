@@ -388,16 +388,16 @@ Layer 2 presentation.
 | File | Responsibility |
 |---|---|
 | `client.go` | HTTP client (Get/Post/Put/Delete/PostMultipart), `MapStatus`, `rateLimitError`, sentinel errors (`ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrRateLimited`, `ErrServer`) |
-| `agile.go` | Agile REST client (`AgileGet`/`AgilePost`/`AgilePut`, `agileURL`), domain types (`Board`, `BoardConfig`, `BoardColumn`, `BoardFilter`, `Sprint`, `AgileConfig`), read methods (`ListBoards`, `ListBoardsCached`, `GetBoardConfig`, `GetBoardConfigCached`, `GetBoardFilter`, `ListSprints`, `ListSprintsCached`, `ListSprintNames`, `HydrateSprintDates`, `ListAllSprintsPaged`, `GetSprint`, `ListSprintIssues`, `ListBoardIssues`), mutation methods (`MoveIssuesToSprint`, `MoveIssuesToBacklog`), `ResolveSprintField`, `ErrBoardNoSprints`, `sprintQueryEnvelope` |
+| `agile.go` | Agile REST client (`AgileGet`/`AgilePost`/`AgilePut`, `agileURL`), domain types (`Board`, `BoardConfig`, `BoardColumn`, `BoardFilter`, `Sprint`, `AgileConfig`), read methods (`ListBoards`, `ListBoardsCached`, `GetBoardConfig`, `GetBoardConfigCached`, `GetBoardFilter`, `ListSprints`, `ListSprintsCached`, `ListSprintNames`, `HydrateSprintDates`, `ListAllSprintsPaged`, `ListSprintsDefaultView`, `ListAllSprintsHydrated`, `GetSprint`, `ListSprintIssues`, `ListBoardIssues`), sprint recency/archive helpers (`parseSprintTime`, `isImmutableClosed`, `loadSprintArchive`/`saveSprintArchive`, `allSprintNames`, `DefaultClosedWindow`), mutation methods (`MoveIssuesToSprint`, `MoveIssuesToBacklog`), `ResolveSprintField`, `ErrBoardNoSprints`, `sprintQueryEnvelope` |
 | `ref.go` | Reference grammar parser (`ACME-123`, `:comment:`, `:attach:`, `:link:`, browse URLs) — `RefIssue`, `RefComment`, `RefAttachment`, `RefLink` |
-| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord (reads ParentLink as Portfolio fallback when primary Portfolio field is empty), ResolveActivityStatusCategories, SprintRef, parseSprintRaw |
+| `issue.go` | GetIssue, DeleteIssue, IssueRaw, IssueRecord (incl. `portfolio`), HierarchyFieldIDs, ExtractRawKey, ToIssueRecord (reads ParentLink as Portfolio fallback when primary Portfolio field is empty), ResolveActivityStatusCategories, SprintRef, parseSprintRaw, FormatSprintField (compact one-line sprint rendering for plain `search --fields sprint`) |
 | `search.go` | Search (POST /search), SearchIssueRecord (incl. Sprints []SprintRef), ToSearchRecord |
 | `jql.go` | DefaultOpenFilter (statusCategory-based, not status names) |
 | `comments.go` | GetComments, AddComment |
 | `history.go` | GetChangelog (DC 8.7+ dedicated endpoint; falls back to expand=changelog) |
 | `transitions.go` | GetTransitions, DoTransition |
 | `attachments.go` | GetAttachmentMeta, DownloadAttachment, UploadAttachment |
-| `lookup.go` | TTL constants, shared types (Project, Component, Version, Priority, ...), list methods, `PortfolioCandidates`, TTLBoards, TTLBoardConfig, TTLSprintsActive, TTLSprintsClosed |
+| `lookup.go` | TTL constants, shared types (Project, Component, Version, Priority, ...), list methods, `PortfolioCandidates`, TTLBoards, TTLBoardConfig, TTLSprintsActive, TTLSprintsClosed, TTLSprintArchive |
 | `projects.go` | ListProjects, GetProject, ListProjectIssueTypes, GetCreateMeta, ListProjectPriorities |
 | `users.go` | SearchUsers, SearchAssignableUsers, Assign |
 | `fields.go` | ResolveFieldID, UpdateFields |
@@ -448,10 +448,12 @@ Rate limiting (429) is intercepted in `do()` rather than `MapStatus` because the
   board/<id>/
     config.json           # TTL 1h
   sprints/<boardID>/
-    active+future.json    # TTL 1h  (agile/1.0 page 1, default states)
-    closed.json           # TTL 7d  (agile/1.0 page 1, --state closed)
+    default-<N>d.json     # TTL 1h  (sprint list default view: active+future+closed within N days)
+    archive.json          # TTL 1y  (immutable closed sprints ended >90d ago, id→hydrated record; never refetched)
     names.json            # TTL 1h  (GreenHopper fast path: all sprint names+states in one call)
-    closed-all.json       # TTL 7d  (full paged fetch of all closed sprints, for filter flags)
+    active+future.json    # TTL 1h  (agile/1.0 page 1, default states — sprint current / edit sprint)
+    closed.json           # TTL 7d  (agile/1.0 page 1, --state closed — ListSprintsCached legacy path)
+    closed-all.json       # TTL 7d  (full paged fetch of all closed sprints, --after/--before fallback)
 ```
 
 The hash namespaces caches per (profile, URL) so switching instances never

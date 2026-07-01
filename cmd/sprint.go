@@ -38,13 +38,16 @@ type sprintListFlags struct {
 	Profile      string
 	JSON         bool
 	Board        int
-	State        string // csv: active,future,closed,all — default "active,future"
+	State        string // csv: active,future,closed,all — empty = default recency view
+	All          bool   // --all: show every sprint (all states, full history); disables the recency window
+	ClosedWithin int    // --closed-within N: include closed sprints ending within N days (default view only)
 	Limit        int
 	Page         int
 	NameContains string // --name-contains: case-insensitive substring filter on sprint Name
 	After        string // --after YYYY-MM-DD: keep sprints whose endDate >= this date
 	Before       string // --before YYYY-MM-DD: keep sprints whose startDate <= this date
 	Sort         string // --sort: "asc" or "desc"; defaults to "desc" when --state is exactly "closed"
+	NoCache      bool   // --no-cache: bypass local cache
 }
 
 type sprintShowFlags struct {
@@ -78,12 +81,21 @@ func NewSprintListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List sprints for a scrum board",
-		Long: `List sprints for a scrum board. Defaults to active and future sprints.
+		Long: `List sprints for a scrum board.
+
+By default this shows only the sprints that matter right now: every active and
+future sprint, plus closed sprints that ended within the last 7 days (tune with
+--closed-within). This keeps the command fast on boards with years of history.
+Use --all to fetch every sprint (all states, full history).
+
+Sprints closed longer than 90 days ago are immutable and cached (near-)permanently,
+so repeat runs never refetch them.
 
 Examples:
   jiracli sprint list --board 1234
-  jiracli sprint list --board 1234 --state closed
-  jiracli sprint list --board 1234 --state all --json`,
+  jiracli sprint list --board 1234 --all
+  jiracli sprint list --board 1234 --closed-within 30
+  jiracli sprint list --board 1234 --state closed --all --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.Board == 0 {
@@ -100,13 +112,16 @@ Examples:
 	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
 	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON")
 	c.Flags().IntVar(&flags.Board, "board", 0, "Scrum board ID (required)")
-	c.Flags().StringVar(&flags.State, "state", "active,future", "Comma-separated states: active, future, closed, all")
+	c.Flags().StringVar(&flags.State, "state", "", "Comma-separated states: active, future, closed, all. Empty = default view (active, future, and sprints closed within --closed-within days)")
+	c.Flags().BoolVar(&flags.All, "all", false, "Show every sprint (all states, full history); disables the recency window")
+	c.Flags().IntVar(&flags.ClosedWithin, "closed-within", 7, "Include closed sprints whose endDate is within this many days (default view only; ignored with --all or --after/--before)")
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Max results per page")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().StringVar(&flags.NameContains, "name-contains", "", "Case-insensitive substring filter on sprint name (client-side; fetches all sprints for the board)")
-	c.Flags().StringVar(&flags.After, "after", "", "Keep sprints whose endDate is on/after this YYYY-MM-DD date")
-	c.Flags().StringVar(&flags.Before, "before", "", "Keep sprints whose startDate is on/before this YYYY-MM-DD date")
+	c.Flags().StringVar(&flags.After, "after", "", "Keep sprints whose endDate is on/after this YYYY-MM-DD date (fetches full history)")
+	c.Flags().StringVar(&flags.Before, "before", "", "Keep sprints whose startDate is on/before this YYYY-MM-DD date (fetches full history)")
 	c.Flags().StringVar(&flags.Sort, "sort", "", "Sort by start date: 'asc' or 'desc'. Defaults to 'desc' when --state is exactly 'closed', else 'asc'.")
+	c.Flags().BoolVar(&flags.NoCache, "no-cache", false, "Bypass local cache")
 	return c
 }
 
@@ -203,6 +218,10 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 	if page < 1 {
 		page = 1
 	}
+	closedWithin := flags.ClosedWithin
+	if closedWithin <= 0 {
+		closedWithin = 7
+	}
 
 	// Validate date flags early — no I/O needed.
 	var afterDate, beforeDate time.Time
@@ -230,51 +249,58 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 		}
 	}
 
-	// Fast path: no client-side filters set, preserve existing cached behaviour.
-	isFilteredPath := flags.NameContains != "" || flags.After != "" || flags.Before != "" || flags.Sort != ""
-	if !isFilteredPath {
-		sprints, isLast, fetchErr := client.ListSprintsCached(ctx, flags.Board, states, page, limit, store, false)
-		if fetchErr != nil {
-			if errors.Is(fetchErr, jira.ErrBoardNoSprints) {
-				return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
-			}
-			return "", fetchErr
-		}
-		return renderSprintList(flags, sprints, isLast, page, limit, -1 /*total unknown on cached fast path*/), nil
+	kanbanErr := func() error {
+		return fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
 	}
 
-	// Filtered paths all need the full sprint set.
-	var allSprints []jira.Sprint
-	needDates := flags.After != "" || flags.Before != ""
+	hasDateFilter := flags.After != "" || flags.Before != ""
+	// The recency window drives the default view. It is disabled by --all, by an
+	// explicit --state all, or by a date-range filter (which defines its own
+	// horizon).
+	windowDisabled := flags.All || hasDateFilter || strings.EqualFold(strings.TrimSpace(flags.State), "all")
 
-	if !needDates {
-		// Name-only or sort-only path: use the fast GreenHopper endpoint (1 HTTP call).
-		sprints, ghErr := client.ListSprintNames(ctx, flags.Board, store, false)
+	// Fetch the working set of sprints.
+	var allSprints []jira.Sprint
+	switch {
+	case hasDateFilter:
+		// Date-range filters need every sprint's dates. Use the complete
+		// GreenHopper set with archive-backed hydration — this also fixes the
+		// historical under-reporting of the paged closed endpoint.
+		allSprints, err = client.ListAllSprintsHydrated(ctx, flags.Board, store, flags.NoCache)
+		if err != nil {
+			if errors.Is(err, jira.ErrBoardNoSprints) {
+				return "", kanbanErr()
+			}
+			return "", err
+		}
+	case windowDisabled:
+		// --all / --state all (no date filter): full history, all states. Dates
+		// are hydrated for the displayed page only (below), keeping this cheap.
+		sprints, ghErr := client.ListSprintNames(ctx, flags.Board, store, flags.NoCache)
 		if ghErr != nil {
 			slog.Warn("sprintquery unavailable, falling back to paged listing", "board", flags.Board, "err", ghErr)
-			// Fallback to paged agile/1.0 endpoint.
-			sprints, ghErr = client.ListAllSprintsPaged(ctx, flags.Board, nil, store, false)
+			sprints, ghErr = client.ListAllSprintsPaged(ctx, flags.Board, nil, store, flags.NoCache)
 			if ghErr != nil {
 				if errors.Is(ghErr, jira.ErrBoardNoSprints) {
-					return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
+					return "", kanbanErr()
 				}
 				return "", ghErr
 			}
 		}
 		allSprints = sprints
-	} else {
-		// Date path: must use paged agile/1.0 to get StartDate/EndDate.
-		sprints, fetchErr := client.ListAllSprintsPaged(ctx, flags.Board, states, store, false)
-		if fetchErr != nil {
-			if errors.Is(fetchErr, jira.ErrBoardNoSprints) {
-				return "", fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
+	default:
+		// Default view: active + future + closed-within-window, hydrated cheaply
+		// via the early-stop scan and archive cache.
+		allSprints, err = client.ListSprintsDefaultView(ctx, flags.Board, time.Duration(closedWithin)*24*time.Hour, store, flags.NoCache)
+		if err != nil {
+			if errors.Is(err, jira.ErrBoardNoSprints) {
+				return "", kanbanErr()
 			}
-			return "", fetchErr
+			return "", err
 		}
-		allSprints = sprints
 	}
 
-	// Apply state filter (GreenHopper path returns all states; paged path with states==nil also returns all).
+	// Apply state / name / date filters.
 	filtered := make([]jira.Sprint, 0, len(allSprints))
 	for _, s := range allSprints {
 		if len(states) > 0 {
@@ -354,6 +380,12 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 	page1Sprints := filtered[start:end]
 	isLast := end >= total
 
+	// The GreenHopper names endpoint omits dates. Hydrate them for just the
+	// displayed page (bounded-parallel, ~one round-trip per shown sprint) so the
+	// date column is populated without paging the whole history. On the paged
+	// date path the sprints already carry dates, so this is a no-op.
+	page1Sprints = client.HydrateSprintDates(ctx, page1Sprints)
+
 	return renderSprintList(flags, page1Sprints, isLast, page, limit, total), nil
 }
 
@@ -431,8 +463,8 @@ func sprintIssues(ctx context.Context, flags sprintIssuesFlags, idStr string) (s
 	}
 
 	header := fmt.Sprintf("sprint: %d  %s", sprintID, sprintName)
-	sf := SearchFlags{Limit: limit, Page: page}
-	return renderSearchPlain(resp, header, fmt.Sprintf("jiracli sprint issues %d", sprintID), page, limit, sf, fields, entry.Hierarchy.StoryPointsField)
+	sf := SearchFlags{Limit: limit, Page: page, PageCmdBase: fmt.Sprintf("jiracli sprint issues %d", sprintID)}
+	return renderSearchPlain(resp, header, "", page, limit, sf, fields, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField)
 }
 
 func sprintCurrent(ctx context.Context, flags sprintCurrentFlags) (string, error) {
@@ -524,8 +556,8 @@ func sprintCurrent(ctx context.Context, flags sprintCurrentFlags) (string, error
 	}
 
 	header := fmt.Sprintf("sprint: %d  %s", spr.ID, spr.Name)
-	sf := SearchFlags{Limit: issueLimit, Page: 1}
-	issueText, _ := renderSearchPlain(resp, header, fmt.Sprintf("jiracli sprint issues %d", spr.ID), 1, issueLimit, sf, fields, entry.Hierarchy.StoryPointsField)
+	sf := SearchFlags{Limit: issueLimit, Page: 1, PageCmdBase: fmt.Sprintf("jiracli sprint issues %d", spr.ID)}
+	issueText, _ := renderSearchPlain(resp, header, "", 1, issueLimit, sf, fields, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField)
 	sb.WriteString(issueText)
 	if resp.Total > issueLimit {
 		fmt.Fprintf(&sb, "→ jiracli sprint issues %d --limit 100\n", spr.ID)
@@ -773,8 +805,14 @@ func renderSprintList(flags sprintListFlags, sprints []jira.Sprint, isLast bool,
 func buildSprintListNextCmd(flags sprintListFlags, nextPage, limit int) string {
 	var parts []string
 	parts = append(parts, fmt.Sprintf("jiracli sprint list --board %d --page %d --limit %d", flags.Board, nextPage, limit))
-	if flags.State != "" && flags.State != "active,future" {
+	if flags.All {
+		parts = append(parts, "--all")
+	}
+	if flags.State != "" {
 		parts = append(parts, fmt.Sprintf("--state %s", flags.State))
+	}
+	if flags.ClosedWithin != 0 && flags.ClosedWithin != 7 {
+		parts = append(parts, fmt.Sprintf("--closed-within %d", flags.ClosedWithin))
 	}
 	if flags.NameContains != "" {
 		parts = append(parts, fmt.Sprintf("--name-contains %q", flags.NameContains))
@@ -787,6 +825,9 @@ func buildSprintListNextCmd(flags sprintListFlags, nextPage, limit int) string {
 	}
 	if flags.Sort != "" {
 		parts = append(parts, fmt.Sprintf("--sort %s", flags.Sort))
+	}
+	if flags.NoCache {
+		parts = append(parts, "--no-cache")
 	}
 	return "next: " + strings.Join(parts, " ")
 }

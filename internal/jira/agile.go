@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cgrossde/jiracli/internal/cache"
@@ -425,18 +428,49 @@ func (c *Client) ListSprintNames(ctx context.Context, boardID int, store *cache.
 // HydrateSprintDates fills StartDate/EndDate on sprints that lack them by
 // calling GetSprint per id. Existing dates are preserved (no overwrite).
 // Failed individual lookups leave that sprint's dates empty and are silently skipped.
+//
+// Lookups run concurrently (bounded worker pool) because this is called on a
+// single display page of sprints where sequential per-id round-trips would
+// dominate latency. Each worker writes only its own unique slice index, so no
+// locking is required.
 func (c *Client) HydrateSprintDates(ctx context.Context, sprints []Sprint) []Sprint {
+	const maxWorkers = 8
+
+	todo := make([]int, 0, len(sprints))
 	for i := range sprints {
-		if sprints[i].StartDate != "" || sprints[i].EndDate != "" {
-			continue
+		if sprints[i].StartDate == "" && sprints[i].EndDate == "" {
+			todo = append(todo, i)
 		}
-		full, err := c.GetSprint(ctx, sprints[i].ID)
-		if err != nil {
-			continue
-		}
-		sprints[i].StartDate = full.StartDate
-		sprints[i].EndDate = full.EndDate
 	}
+	if len(todo) == 0 {
+		return sprints
+	}
+
+	workers := maxWorkers
+	if len(todo) < workers {
+		workers = len(todo)
+	}
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				full, err := c.GetSprint(ctx, sprints[i].ID)
+				if err != nil {
+					continue
+				}
+				sprints[i].StartDate = full.StartDate
+				sprints[i].EndDate = full.EndDate
+			}
+		}()
+	}
+	for _, i := range todo {
+		idx <- i
+	}
+	close(idx)
+	wg.Wait()
 	return sprints
 }
 
@@ -471,6 +505,227 @@ func (c *Client) ListAllSprintsPaged(ctx context.Context, boardID int, states []
 	}
 	if cacheKey != "" && !noCache && store != nil {
 		_ = store.Put(cacheKey, all)
+	}
+	return all, nil
+}
+
+// ---------------------------------------------------------------------------
+// Recency window + archive cache
+// ---------------------------------------------------------------------------
+
+const (
+	// DefaultClosedWindow is the default recency window for the `sprint list`
+	// default view: closed sprints whose endDate falls within this window of now
+	// are shown; older ones require --all or a date-range filter.
+	DefaultClosedWindow = 7 * 24 * time.Hour
+
+	// sprintArchiveAge marks the point past which a closed sprint is immutable.
+	// A sprint closed longer than this ago never changes, so its fully hydrated
+	// record is cached (near-)permanently and never refetched.
+	sprintArchiveAge = 90 * 24 * time.Hour
+
+	// closedProbeCap bounds how many closed sprints the default view will hydrate
+	// while scanning newest-first for the recency window. It is a safety net for
+	// boards whose sprint ids are not perfectly monotonic with end date; the scan
+	// normally stops far earlier when it crosses the window boundary.
+	closedProbeCap = 50
+)
+
+// parseSprintTime parses a Jira sprint date/datetime string, returning the zero
+// time when s is empty or unparseable.
+func parseSprintTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.999Z07:00",
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// isImmutableClosed reports whether a sprint is closed and ended long enough ago
+// (> sprintArchiveAge) that its record will never change again.
+func isImmutableClosed(s Sprint, now time.Time) bool {
+	if !strings.EqualFold(s.State, "closed") {
+		return false
+	}
+	end := parseSprintTime(s.EndDate)
+	if end.IsZero() {
+		return false
+	}
+	return now.Sub(end) > sprintArchiveAge
+}
+
+// loadSprintArchive reads the per-board archive of immutable closed sprints
+// (id -> fully hydrated Sprint). A missing/expired/corrupt cache yields an empty
+// map. The archive TTL is intentionally long: its members never change.
+func (c *Client) loadSprintArchive(boardID int, store *cache.Store, noCache bool) map[int]Sprint {
+	if noCache || store == nil {
+		return map[int]Sprint{}
+	}
+	var cached map[int]Sprint
+	if err := store.Get(fmt.Sprintf("sprints/%d/archive", boardID), TTLSprintArchive, &cached); err == nil && cached != nil {
+		return cached
+	}
+	return map[int]Sprint{}
+}
+
+// saveSprintArchive persists the archive map. No-op when caching is disabled or
+// the map is empty.
+func (c *Client) saveSprintArchive(boardID int, store *cache.Store, noCache bool, arch map[int]Sprint) {
+	if noCache || store == nil || len(arch) == 0 {
+		return
+	}
+	_ = store.Put(fmt.Sprintf("sprints/%d/archive", boardID), arch)
+}
+
+// allSprintNames returns every sprint for a board (id/name/state), preferring the
+// single-call GreenHopper sprintquery endpoint and falling back to the paged
+// agile/1.0 endpoint when GreenHopper is unavailable. The bool reports whether
+// the returned sprints already carry start/end dates (true only on the paged
+// fallback path).
+func (c *Client) allSprintNames(ctx context.Context, boardID int, store *cache.Store, noCache bool) ([]Sprint, bool, error) {
+	names, err := c.ListSprintNames(ctx, boardID, store, noCache)
+	if err == nil {
+		return names, false, nil
+	}
+	slog.Warn("sprintquery unavailable, falling back to paged listing", "board", boardID, "err", err)
+	paged, perr := c.ListAllSprintsPaged(ctx, boardID, nil, store, noCache)
+	if perr != nil {
+		return nil, false, perr
+	}
+	return paged, true, nil
+}
+
+// ListSprintsDefaultView returns the default `sprint list` working set for a
+// board: every active and future sprint plus closed sprints whose endDate falls
+// within closedWindow of now. Dates are hydrated on the returned sprints.
+//
+// Closed sprints are scanned newest-id-first (sprint id is a recency proxy) and
+// hydrated one at a time only until one falls outside the window — everything
+// older is then assumed outside it too, so hydration stops. Dates for immutable
+// closed sprints (ended > 90d ago) are read from, and newly discovered ones
+// written to, the archive cache. The whole view is cached for TTLSprintsActive
+// so repeat calls within the hour avoid re-hydration entirely.
+//
+// This keeps the default view to a handful of round-trips even on boards with
+// years of sprint history.
+func (c *Client) ListSprintsDefaultView(ctx context.Context, boardID int, closedWindow time.Duration, store *cache.Store, noCache bool) ([]Sprint, error) {
+	days := int(closedWindow / (24 * time.Hour))
+	cacheKey := fmt.Sprintf("sprints/%d/default-%dd", boardID, days)
+	if !noCache && store != nil {
+		var cached []Sprint
+		if err := store.Get(cacheKey, TTLSprintsActive, &cached); err == nil {
+			return cached, nil
+		}
+	}
+
+	all, haveDates, err := c.allSprintNames(ctx, boardID, store, noCache)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	cutoff := now.Add(-closedWindow)
+
+	var live, closed []Sprint
+	for _, s := range all {
+		if strings.EqualFold(s.State, "closed") {
+			closed = append(closed, s)
+		} else {
+			live = append(live, s)
+		}
+	}
+	// Active + future are always shown; hydrate their (small) date set.
+	if !haveDates {
+		live = c.HydrateSprintDates(ctx, live)
+	}
+
+	// Closed sprints: newest id first, stop once one falls outside the window.
+	sort.Slice(closed, func(i, j int) bool { return closed[i].ID > closed[j].ID })
+	arch := c.loadSprintArchive(boardID, store, noCache)
+	var recent []Sprint
+	probes := 0
+	for i := range closed {
+		s := closed[i]
+		if a, ok := arch[s.ID]; ok {
+			// Immutable, already-hydrated old sprint — use cached dates, no fetch.
+			s.StartDate, s.EndDate = a.StartDate, a.EndDate
+		} else if !haveDates && s.StartDate == "" && s.EndDate == "" {
+			full, gErr := c.GetSprint(ctx, s.ID)
+			if gErr != nil {
+				continue
+			}
+			s.StartDate, s.EndDate = full.StartDate, full.EndDate
+			probes++
+		}
+		end := parseSprintTime(s.EndDate)
+		if !end.IsZero() && end.Before(cutoff) {
+			// Outside the window. Sprint ids are a recency proxy, so every
+			// remaining (older) closed sprint is outside it too: stop here.
+			if isImmutableClosed(s, now) {
+				arch[s.ID] = s
+			}
+			break
+		}
+		if !end.IsZero() {
+			recent = append(recent, s)
+		}
+		if probes >= closedProbeCap {
+			break
+		}
+	}
+	c.saveSprintArchive(boardID, store, noCache, arch)
+
+	out := append(live, recent...)
+	if !noCache && store != nil {
+		_ = store.Put(cacheKey, out)
+	}
+	return out, nil
+}
+
+// ListAllSprintsHydrated returns every sprint for a board with start/end dates
+// hydrated. It is the complete set (via the GreenHopper single-call endpoint),
+// unlike the paged agile/1.0 closed endpoint which can under-report on boards
+// with long histories. Immutable closed sprints are served from — and newly
+// discovered ones added to — the archive cache, so repeat calls only hydrate the
+// handful of sprints that can still change (active/future/recently-closed).
+func (c *Client) ListAllSprintsHydrated(ctx context.Context, boardID int, store *cache.Store, noCache bool) ([]Sprint, error) {
+	all, haveDates, err := c.allSprintNames(ctx, boardID, store, noCache)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	arch := c.loadSprintArchive(boardID, store, noCache)
+
+	if !haveDates {
+		for i := range all {
+			if a, ok := arch[all[i].ID]; ok {
+				all[i].StartDate = a.StartDate
+				all[i].EndDate = a.EndDate
+			}
+		}
+		all = c.HydrateSprintDates(ctx, all) // fills only the still-empty ones
+	}
+
+	changed := false
+	for i := range all {
+		if _, ok := arch[all[i].ID]; ok {
+			continue
+		}
+		if isImmutableClosed(all[i], now) {
+			arch[all[i].ID] = all[i]
+			changed = true
+		}
+	}
+	if changed {
+		c.saveSprintArchive(boardID, store, noCache, arch)
 	}
 	return all, nil
 }

@@ -247,7 +247,7 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 	// Case 1: no description in fields — no preview lines.
 	t.Run("no description field — no preview", func(t *testing.T) {
 		fields := defaultSearchFieldsCopy()
-		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "")
+		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -260,7 +260,7 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 	// Case 2: description in fields — preview on issue 1, not issue 2 (empty desc).
 	t.Run("description in fields — preview on issue with description only", func(t *testing.T) {
 		fields := append(defaultSearchFieldsCopy(), "description")
-		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "")
+		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -275,9 +275,12 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 	})
 
 	// Case 3: description,reporter,fixVersions added — description preview AND extra-fields line rendered.
+	// Extra columns are derived from the request (flags.Fields), so the flag must
+	// be set as it would be after real flag parsing.
 	t.Run("multi-add: description preview + extra fields line rendered", func(t *testing.T) {
 		fields := append(defaultSearchFieldsCopy(), "description", "reporter", "fixVersions")
-		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, SearchFlags{}, fields, "")
+		flags := SearchFlags{Fields: "description,reporter,fixVersions"}
+		out, err := renderSearchPlain(resp, "key in (WEB-1, WEB-2)", "key in (WEB-1, WEB-2)", 1, 50, flags, fields, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -291,6 +294,68 @@ func TestRenderSearchPlain_DescriptionLine(t *testing.T) {
 		// Description preview still present.
 		if !strings.Contains(out, "This is the description text") {
 			t.Error("description preview should still appear")
+		}
+	})
+}
+
+// ── Test 4b: labels/components render when requested; fields-only layout ─────
+
+func TestRenderSearchPlain_LabelsAndFieldsOnly(t *testing.T) {
+	iss := jira.IssueRaw{}
+	iss.Key = "WEB-1"
+	iss.Fields.Summary = "Issue with labels"
+	iss.Fields.Status.Name = "Open"
+	iss.Fields.Status.StatusCategory.Key = "new"
+	iss.Fields.IssueType.Name = "Bug"
+	iss.Fields.Labels = []string{"in-development", "regression"}
+	iss.Fields.Updated = time.Now().Add(-2 * time.Hour).Format("2006-01-02T15:04:05.000-0700")
+
+	resp := jira.SearchResponse{Issues: []jira.IssueRaw{iss}, Total: 1}
+
+	// --fields +labels must render the Labels column (previously a silent no-op
+	// because labels is fetched by default and was excluded from extras).
+	t.Run("+labels renders", func(t *testing.T) {
+		fields := append(defaultSearchFieldsCopy(), "labels")
+		flags := SearchFlags{Fields: "+labels"}
+		out, err := renderSearchPlain(resp, "q", "q", 1, 50, flags, fields, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "Labels: in-development, regression") {
+			t.Errorf("expected labels to render, got:\n%s", out)
+		}
+	})
+
+	// Default search (no --fields) must NOT render a labels line — labels are
+	// fetched for JSON completeness but should stay out of plain output.
+	t.Run("default does not render labels", func(t *testing.T) {
+		fields := defaultSearchFieldsCopy()
+		out, err := renderSearchPlain(resp, "q", "q", 1, 50, SearchFlags{}, fields, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "Labels:") {
+			t.Errorf("labels should not appear by default, got:\n%s", out)
+		}
+	})
+
+	// --fields-only renders only the requested fields, with no fixed template
+	// scaffolding (no "Prio:" and no bare "Updated:  ago").
+	t.Run("fields-only renders only requested", func(t *testing.T) {
+		fields := []string{"key", "summary", "labels"}
+		flags := SearchFlags{FieldsOnly: "key,summary,labels"}
+		out, err := renderSearchPlain(resp, "q", "q", 1, 50, flags, fields, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "Labels: in-development, regression") {
+			t.Errorf("expected labels in fields-only output, got:\n%s", out)
+		}
+		if strings.Contains(out, "Prio:") {
+			t.Errorf("fields-only must not emit the Prio scaffolding, got:\n%s", out)
+		}
+		if strings.Contains(out, " ago") {
+			t.Errorf("fields-only must not emit a bare relative-time scaffold, got:\n%s", out)
 		}
 	})
 }

@@ -282,6 +282,6 @@ func boardIssues(ctx context.Context, flags boardIssuesFlags, idStr string) (str
 	}
 
 	header := fmt.Sprintf("board: %d  %s", boardID, boardName)
-	sf := SearchFlags{Limit: limit, Page: page}
-	return renderSearchPlain(resp, header, fmt.Sprintf("jiracli board issues %d", boardID), page, limit, sf, fields, entry.Hierarchy.StoryPointsField)
+	sf := SearchFlags{Limit: limit, Page: page, PageCmdBase: fmt.Sprintf("jiracli board issues %d", boardID)}
+	return renderSearchPlain(resp, header, "", page, limit, sf, fields, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField)
 }

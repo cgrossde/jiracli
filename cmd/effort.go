@@ -290,6 +290,12 @@ func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) 
 		return fmt.Sprintf("%s has no children — nothing to roll up.\n", key), nil
 	}
 
+	// Refuse to emit misleading partial totals: if this level exceeded the fetch
+	// cap, abort before any filtering (which would mask the truncation).
+	if l1Truncated && !flags.All {
+		return "", errEffortTruncated(l1Total, limit)
+	}
+
 	// Apply the client-side state/exclude-done filter to the fetched children.
 	// After filtering we can no longer trust the server-reported total or the
 	// truncation flag for the filtered subset, so pin them to what we counted.
@@ -344,6 +350,9 @@ func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) 
 				if fetchErr != nil {
 					l2Truncated = true
 					continue
+				}
+				if trunc && !flags.All {
+					return "", errEffortTruncated(total, limit)
 				}
 				if filterActive {
 					nodes = filterRollupNodes(nodes, filter)
@@ -405,6 +414,9 @@ func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) 
 				// fail-soft: record truncation but continue
 				l2Truncated = true
 				continue
+			}
+			if trunc && !flags.All {
+				return "", errEffortTruncated(total, limit)
 			}
 			if filterActive {
 				nodes = filterRollupNodes(nodes, filter)
@@ -486,6 +498,18 @@ func withSince(jql, since string) string {
 		return jql + " AND updated >= " + since
 	}
 	return jql + ` AND updated >= "` + since + `"`
+}
+
+// errEffortTruncated reports that an aggregation would be incomplete because the
+// result set exceeded the fetch cap. Effort never emits partial totals (they are
+// silently wrong), so this is corrective: it tells the caller how to widen the
+// fetch so the command can succeed.
+func errEffortTruncated(matched, limit int) error {
+	return fmt.Errorf(
+		"effort aggregation incomplete: %d issues matched but only %d were fetched — "+
+			"partial totals would be misleading. Re-run with --all to aggregate every issue, "+
+			"or raise the cap with --limit %d",
+		matched, limit, matched)
 }
 
 // fetchNodes pages through a JQL search and returns RollupNodes.
@@ -673,6 +697,11 @@ func effortJQL(ctx context.Context, flags EffortFlags, filter jira.ChildFilter) 
 	nodes, total, truncated, err := fetchNodes(ctx, client, jql, fields, limit, spField)
 	if err != nil {
 		return "", fmt.Errorf("fetching issues for effort rollup: %w", err)
+	}
+	// Refuse to emit misleading partial totals: if the result set exceeded the
+	// fetch cap, abort and tell the caller how to aggregate everything.
+	if truncated && !flags.All {
+		return "", errEffortTruncated(total, limit)
 	}
 	// Apply the client-side state/exclude-done filter.
 	if filter.Category != "" || filter.ExcludeDone {

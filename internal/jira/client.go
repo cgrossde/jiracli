@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -280,6 +281,31 @@ func MapStatus(profile string, status int, body []byte) error {
 		return fmt.Errorf("%s: %w", msg, ErrUnauthorized)
 
 	case status == http.StatusForbidden:
+		// Try to surface Jira's own error detail (WAF / content policy rejections
+		// return a JSON body with errorMessages that explain the actual reason).
+		var eb jiraErrorBody
+		if err := json.Unmarshal(body, &eb); err == nil {
+			var msgs []string
+			msgs = append(msgs, eb.ErrorMessages...)
+			for k, v := range eb.Errors {
+				msgs = append(msgs, k+": "+v)
+			}
+			if len(msgs) > 0 {
+				return fmt.Errorf("access denied (HTTP 403): %s: %w", strings.Join(msgs, "; "), ErrForbidden)
+			}
+		}
+		// Akamai WAF returns an HTML page; surface the reference ID so the
+		// admin can look up the blocked request in the WAF logs.
+		if strings.Contains(string(body), "edgesuite.net") || strings.Contains(string(body), "Reference") {
+			if idx := strings.Index(string(body), "Reference"); idx >= 0 {
+				ref := strings.TrimSpace(string(body)[idx:])
+				if end := strings.IndexAny(ref, "<\n"); end > 0 {
+					ref = strings.TrimSpace(ref[:end])
+				}
+				return fmt.Errorf("access denied (HTTP 403 — blocked by WAF): %s: %w", html.UnescapeString(ref), ErrForbidden)
+			}
+			return fmt.Errorf("access denied (HTTP 403 — blocked by WAF — request content triggered a security filter): %w", ErrForbidden)
+		}
 		return fmt.Errorf("access denied (HTTP 403): %w", ErrForbidden)
 
 	case status == http.StatusNotFound:

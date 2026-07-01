@@ -29,7 +29,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `show transitions <KEY>` | `--profile`, `--json` | Available workflow transitions |
 | `hierarchy <KEY>` | `--profile`, `--json`, `--all`, `--open`, `--exclude-done`, `--state`, `--depth N`, `--flat`, `--since` | Top-level. Maps an issue both ways: **up** the parent chain (Story → Epic → Initiative/portfolio) to locate it, and **down** through descendants (use `--depth`) to list everything nested under an Initiative/Epic. Filter with `--exclude-done`/`--open`/`--state todo\|in-progress\|done\|all` (shared vocabulary with `search` and `effort`). |
 | `show attachments <KEY>` | `--profile`, `--json` | List attachments |
-|`effort <KEY>`|`--profile`, `--json`, `--all`, `--limit N`, `--depth N`, `--exclude-done`, `--open`, `--state`, `--since`, `--group-by status\|statusCategory`|Top-level (formerly `show rollup`). Hierarchy rollup: walks the issue's children and aggregates time + story points. `--group-by status\|statusCategory` replaces per-level rows with a per-status breakdown. Reports totals only — use `jiracli hierarchy <KEY>` for a per-child breakdown. Filter with `--exclude-done`/`--open`/`--state`/`--since`. `--limit N` caps children per level (default 100); `--all` fetches everything.|
+|`effort <KEY>`|`--profile`, `--json`, `--all`, `--limit N`, `--depth N`, `--exclude-done`, `--open`, `--state`, `--since`, `--group-by status\|statusCategory`|Top-level (formerly `show rollup`). Hierarchy rollup: walks the issue's children and aggregates time + story points. `--group-by status\|statusCategory` replaces per-level rows with a per-status breakdown. Reports totals only — use `jiracli hierarchy <KEY>` for a per-child breakdown. Filter with `--exclude-done`/`--open`/`--state`/`--since`. `--limit N` caps children per level (default 100); `--all` fetches everything. Aborts non-zero if the cap truncates the match set (partial totals would mislead) — re-run with `--all` or a higher `--limit`.|
 |`effort jql <query>`|`--profile`, `--json`, `--all`, `--limit N`, `--exclude-done`, `--open`, `--state`, `--since`, `--group-by assignee\|status\|statusCategory`|Aggregate time + story points over a JQL result set (no hierarchy config needed). Query joined from positional args. `--group-by assignee\|status\|statusCategory` breaks totals down by dimension.|
 |`effort sprint <id>`|`--profile`, `--json`, `--all`, `--limit N`, `--exclude-done`, `--open`, `--state`, `--since`, `--group-by assignee\|status\|statusCategory`|Aggregate time + story points over a sprint's issues (no hierarchy config needed). `<id>` is the numeric sprint id.|
 | `search [<jql...>]` | `--profile`, `--json`, `--keys-only`, `--exclude-done`, `--open`, `--limit`, `--page`, `--fields`, `--fields-only`, `--assigned`, `--state`, `--jql`, `--time`, `--count-by` | Search issues (`--assigned` also excludes Done unless `--state` is set; `--state all` includes Done); `--open` is an alias for `--exclude-done`; `--time` adds Estimate/Remaining/Spent columns; `--count-by FIELD` replaces the issue list with a count/percent histogram (supported fields: status, statusCategory, priority, assignee, issueType, resolution, project); paginates internally to exhaustion — `--limit` and `--page` are ignored when `--count-by` is set. |
@@ -54,7 +54,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `board list` | `--profile`, `--project` (required), `--type` (scrum\|kanban), `--limit`, `--page`, `--json`, `--no-cache` | List Agile boards for a project (alias of `lookup boards`) |
 | `board show <id>` | `--profile`, `--project`, `--json`, `--no-cache` | Show board configuration (columns, type) |
 | `board issues <id>` | `--profile`, `--limit`, `--page`, `--json`, `--keys-only` | List issues on a board via Agile API |
-| `sprint list` | `--profile`, `--board` (required), `--state`, `--limit`, `--page`, `--json`, `--name-contains`, `--after`, `--before`, `--sort` | List sprints. Filter flags are client-side; `--state closed` defaults to newest-first (`--sort desc`). |
+| `sprint list` | `--profile`, `--board` (required), `--state`, `--all`, `--closed-within`, `--limit`, `--page`, `--json`, `--name-contains`, `--after`, `--before`, `--sort`, `--no-cache` | List sprints. **Default view** = active + future + closed within the last 7 days (`--closed-within N` to widen); `--all` for every sprint (full history). Immutable closed sprints (>90 d) are cached permanently. Filter flags are client-side; `--state closed` defaults to newest-first (`--sort desc`). |
 | `sprint show <id>` | `--profile`, `--json` | Show sprint details |
 | `sprint issues <id>` | `--profile`, `--limit`, `--page`, `--json`, `--keys-only` | List issues in a sprint |
 | `sprint current` | `--profile`, `--board` (required), `--assigned`, `--exclude-done`, `--json` | Show active sprint and embedded issue list for a board |
@@ -86,6 +86,14 @@ On failure, stderr is always included:
 [stderr] reason here
 [exit:1 | 3ms]
 ```
+
+### Errors & usage
+
+Help output is scoped to the kind of failure:
+
+- **Bare invocation** (no args, no flags) → full help for the command.
+- **Invalid argument/flag** → short usage line plus `Run '<cmd> --help' for more details.`
+- **Runtime/API error** → only the error message (no usage dump).
 
 ### Overflow (progressive disclosure)
 

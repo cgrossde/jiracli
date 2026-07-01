@@ -298,15 +298,15 @@ Default fields fetched: `key, status, issuetype, priority, assignee, updated, su
 |---|---|---|
 | `description` | _(preview line)_ | Stripped wiki markup, ≤100 chars |
 | `reporter` | `Reporter` | Add with `reporter` |
-| `labels` | `Labels` | In default set |
-| `components` | `Components` | In default set |
+| `labels` | `Labels` | Fetched by default (present in `--json`); add `+labels` to show it as a plain-text column |
+| `components` | `Components` | Fetched by default (present in `--json`); add `+components` to show it as a plain-text column |
 | `fixVersions` | `Fix Version` | Add with `fixVersions` |
 | `resolution` | `Resolution` | Add with `resolution` |
 | `duedate` | `Due` | Add with `duedate` |
 | `timeestimate` | `Remaining` | Formatted as `2h30m` |
 | `timeoriginalestimate` | `Estimate` | Formatted as `2h30m` |
 | `timespent` | `Spent` | Formatted as `2h30m` |
-| `sprint` | `Sprint` | Alias — resolved to the configured sprint custom field id. Requires `jiracli config agile`. Omitted silently when not configured. |
+| `sprint` | `Sprint` | Alias — resolved to the configured sprint custom field id. Requires `jiracli config agile`; the token is dropped silently when not configured. Renders compactly as the sprint name(s), comma-separated, with the active sprint marked `(active)` — e.g. `Sprint: Sprint 41, Sprint 42 (active)`. |
 | `customfield_XXXXX` | raw ID | Any field ID from `jiracli lookup fields` |
 
 `--fields-only "key,summary,description"` restricts to exactly those fields (mutex with `--fields`). `type` renders from `issueType`; the NDJSON field is `issueType`.
@@ -561,13 +561,20 @@ List sprints for a scrum board.
 |Flag|Default|Description|
 |---|---|---|
 |`--board <id>`|—|Scrum board ID (**required**)|
-|`--state <csv>`|`active,future`|Comma-separated subset: `active`, `future`, `closed`, `all`|
+|`--state <csv>`|_(empty → default view)_|Comma-separated subset: `active`, `future`, `closed`, `all`|
+|`--all`|false|Show every sprint (all states, full history); disables the recency window|
+|`--closed-within N`|7|Include closed sprints ending within N days (default view only; ignored with `--all`/`--after`/`--before`)|
 |`--limit N`|50|Results per page|
 |`--page N`|1|1-indexed page|
+|`--name-contains <text>`|—|Case-insensitive substring filter on sprint name (client-side)|
+|`--after YYYY-MM-DD`|—|Keep sprints whose `endDate` is on/after this date (fetches full history)|
+|`--before YYYY-MM-DD`|—|Keep sprints whose `startDate` is on/before this date (fetches full history)|
+|`--sort asc\|desc`|`desc` for `--state closed`, else `asc`|Sort order (newest-first for closed)|
+|`--no-cache`|false|Bypass local cache|
 |`--json`|false|NDJSON output|
 |`--profile <name>`|default|Credential profile|
 
-Calls `GET /rest/agile/1.0/board/<id>/sprint`. On a kanban board: exits 1 with corrective message:
+By default (`--state` empty, no `--all`, no date filter) `sprint list` returns only **active + future sprints plus closed sprints that ended within the last 7 days** (`--closed-within N` widens the window). It fetches the full id/name/state set in one GreenHopper `sprintquery` call (cached 1 h), then scans closed sprints newest-first and hydrates their dates only until one falls outside the window — sprint id is a recency proxy, so hydration stops early. Sprints closed > 90 days ago are cached permanently (`archive`) and never refetched. `--all` (and `--state all`) return the complete history; `--after`/`--before` fetch the complete hydrated set (fixing under-reporting of the paged closed endpoint). See `docs/boards-sprints.md` for the full endpoint decision table. On a kanban board: exits 1 with corrective message:
 
     [stderr] board 102 is kanban and does not support sprints — use: jiracli board issues 102
 
@@ -696,6 +703,14 @@ Uses `GET /rest/api/2/issue/<KEY>/comment?startAt=N&maxResults=M&orderBy=created
 
 --- page 1 of 3 | next: jiracli show comments ACME-123 --page 2 --limit 50 ---
 ```
+
+When the issue has no comments, a friendly empty-state line is printed (consistent with `show attachments`) rather than a bare pagination footer:
+
+```
+ACME-123 has no comments.
+```
+
+With `--since`, the empty-state reads `ACME-123 has no comments on or after <date>.`
 
 ### NDJSON output (`--json`)
 
@@ -1034,6 +1049,12 @@ To see the individual children, use `jiracli hierarchy <KEY>` — `effort` repor
 | `--profile <name>` | all | default | Credential profile |
 
 The `--exclude-done` / `--open` / `--state` filter vocabulary is shared with `jiracli search` and `jiracli hierarchy`. Filtering is applied client-side to the fetched issues.
+
+**Truncation is an error, not a silent partial.** Because effort reports aggregated totals, a partial fetch would produce misleading numbers. When more issues match than the `--limit` cap fetched (and `--all` was not passed), the command aborts non-zero rather than aggregating a truncated set:
+
+    [stderr] effort aggregation incomplete: 1917 issues matched but only 100 were fetched — partial totals would be misleading. Re-run with --all to aggregate every issue, or raise the cap with --limit 1917
+
+This applies to every mode (`<KEY>` hierarchy levels, `jql`, and `sprint`).
 
 ### Plain-text output shape
 

@@ -48,6 +48,16 @@ jiracli show PROJ-1 PROJ-2 PROJ-3 ... PROJ-20
 # Fast — one API call, same status info
 jiracli search --jql 'key in (PROJ-1, PROJ-2, PROJ-3, ..., PROJ-20)' --limit 100
 ```
+`search` isn't limited to status — pass `--fields` to render whatever columns you need, so a single call can return the same fields you'd otherwise batch-`show` for:
+```sh
+# Add assignee + priority columns to the result
+jiracli search --jql 'key in (PROJ-1, PROJ-2, ...)' --fields '+assignee,+priority' --limit 100
+
+# Fetch exactly the fields you want (replaces the default columns)
+jiracli search --jql 'key in (PROJ-1, PROJ-2, ...)' --fields-only 'key,summary,status,assignee' --limit 100
+```
+Use `+name`/`-name` with `--fields` to add or drop columns, or `--fields-only` to specify the exact set. Run `jiracli lookup fields` for available field IDs.
+
 Reserve multi-key `show` for when you need the full issue detail (description, comments, history) on a small set (≤5 keys).
 
 ### Search
@@ -177,7 +187,8 @@ Run `jiracli lookup --help` to see all subcommands.
 jiracli board list --project PROJ          # boards for a project
 jiracli board show 1234                    # columns and board type
 jiracli board show 1234 --details          # + filter name, owner, JQL
-jiracli sprint list --board 1234           # active + future sprints
+jiracli sprint list --board 1234           # default: active + future + closed in last 7d
+jiracli sprint list --board 1234 --all     # every sprint (full history)
 jiracli sprint current --board 1234        # active sprint with embedded issue list
 jiracli sprint issues 5678                 # issues in a specific sprint
 jiracli edit sprint PROJ-123 current --board 1234  # move issue to current sprint (dry-run)

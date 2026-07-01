@@ -213,9 +213,18 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 		fields = make([]string, 0, len(parts))
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
-			if p != "" {
-				fields = append(fields, p)
+			if p == "" {
+				continue
 			}
+			// Map the "sprint" alias to the configured custom-field ID so the
+			// API returns sprint data; drop it when the field is not configured.
+			if p == "sprint" {
+				if sf := entry.Agile.SprintField; sf != "" {
+					fields = append(fields, sf)
+				}
+				continue
+			}
+			fields = append(fields, p)
 		}
 	} else {
 		fields = resolveSearchFields(flags.Fields)
@@ -275,7 +284,93 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 	if flags.JSON {
 		return renderSearchJSON(resp, page, limit, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField)
 	}
-	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags, fields, entry.Hierarchy.StoryPointsField)
+	return renderSearchPlain(resp, effectiveJQL, jql, page, limit, flags, fields, entry.Hierarchy.StoryPointsField, entry.Agile.SprintField)
+}
+
+// baseTemplateFields are rendered in the fixed two-line search layout, so they
+// are never repeated on the extra-fields line.
+var baseTemplateFields = []string{"key", "status", "issuetype", "priority", "assignee", "updated", "summary"}
+
+// displayExtraFields returns the ordered list of fields the caller explicitly
+// asked to see as extra columns, derived from --fields (+name) and --time.
+//
+// It is deliberately based on the request rather than the fetched set: labels
+// and components are fetched by default (for --json completeness) but must only
+// appear in plain output when the caller adds them via --fields.
+func displayExtraFields(flags SearchFlags, spField, sprintField string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		// Map the "sprint" alias to the configured custom-field ID so the value
+		// is looked up under the right RawFields key; drop when unconfigured.
+		if name == "sprint" {
+			if sprintField == "" {
+				return
+			}
+			name = sprintField
+		}
+		if name == "" || name == "description" || containsStr(baseTemplateFields, name) {
+			return
+		}
+		if spField != "" && name == spField {
+			return // story points surface in --json only, not as a plain column
+		}
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if flags.Fields != "" {
+		for _, t := range strings.Split(flags.Fields, ",") {
+			t = strings.TrimSpace(t)
+			if t == "" || strings.HasPrefix(t, "-") {
+				continue // drops are not extra columns
+			}
+			add(strings.TrimPrefix(t, "+"))
+		}
+	}
+	if flags.Time {
+		add("timeoriginalestimate")
+		add("timeestimate")
+		add("timespent")
+	}
+	return out
+}
+
+// renderFieldsOnly renders each issue using exactly the fields listed in
+// --fields-only, with no fixed template. The key anchors each entry; every other
+// requested field is shown as "Label: value" ("—" when absent). "updated" and
+// "created" are formatted as relative times; "description" as a preview.
+func renderFieldsOnly(sb *strings.Builder, issues []jira.IssueRaw, startAt int, fields []string, now time.Time, sprintField string) {
+	for i, raw := range issues {
+		n := startAt + i + 1
+		fmt.Fprintf(sb, "[%d] %s\n", n, raw.Key)
+		var parts []string
+		for _, f := range fields {
+			if f == "key" {
+				continue // already the anchor
+			}
+			var v string
+			switch f {
+			case "updated":
+				v = parseUpdated(raw.Fields.Updated, now) + " ago"
+			case "description":
+				v = descPreview(raw.Fields.Description)
+			default:
+				v = extractFieldValue(raw, f, sprintField)
+			}
+			if v == "" {
+				v = "—"
+			}
+			parts = append(parts, fmt.Sprintf("%s: %s", fieldLabel(f, sprintField), v))
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(sb, "    %s\n", strings.Join(parts, "  "))
+		}
+		sb.WriteByte('\n')
+	}
 }
 
 // resolveSearchFields applies +add / -drop semantics to defaultSearchFields.
@@ -500,7 +595,7 @@ func sectionLabel(s string) string {
 // renderSearchPlain renders human-readable search output.
 // The drill-down hint is shown once before the list (first item) and once in
 // the footer (last item) so an LLM sees it whether it reads the head or tail.
-func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL string, page, limit int, flags SearchFlags, fields []string, spField string) (string, error) {
+func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL string, page, limit int, flags SearchFlags, fields []string, spField, sprintField string) (string, error) {
 	var sb strings.Builder
 	pages := totalPages(resp.Total, limit)
 	if pages == 0 {
@@ -519,55 +614,59 @@ func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL strin
 	sb.WriteByte('\n')
 
 	now := time.Now()
-	// Extra fields: fields beyond the default set, excluding description (has its own line)
-	// and the SP custom field (surfaced in --json only, not as a plain column).
-	var extraFields []string
-	for _, f := range fields {
-		if !containsStr(defaultSearchFields, f) && f != "description" && (spField == "" || f != spField) {
-			extraFields = append(extraFields, f)
-		}
-	}
-	for i, raw := range resp.Issues {
-		n := startAt + i + 1
-		statusName := raw.Fields.Status.Name
-		statusCatKey := raw.Fields.Status.StatusCategory.Key
-		issueType := raw.Fields.IssueType.Name
-		priority := ""
-		if raw.Fields.Priority != nil {
-			priority = raw.Fields.Priority.Name
-		}
-		assignee := "—"
-		if raw.Fields.Assignee != nil {
-			assignee = raw.Fields.Assignee.DisplayName
-		}
-		updated := parseUpdated(raw.Fields.Updated, now)
 
-		// Line 1: type badge + key + cropped summary + status right-aligned at col 110
-		sb.WriteString(titleLine(n, colorIssueType(issueType), raw.Key, raw.Fields.Summary,
-			colorStatus(statusName, statusCatKey)))
-		// Line 2: priority, assignee, updated
-		fmt.Fprintf(&sb, "    Prio: %s  Assignee: %s  Updated: %s ago\n",
-			colorPriority(priority),
-			assignee, updated)
-		// Line 3 (optional): description preview
-		if containsStr(fields, "description") {
-			if preview := descPreview(raw.Fields.Description); preview != "" {
-				fmt.Fprintf(&sb, "    %s\n", preview)
+	if flags.FieldsOnly != "" {
+		// --fields-only: render exactly the requested fields, no fixed template.
+		// This avoids leaking empty scaffolding (e.g. a bare "Updated:  ago") for
+		// fields the caller did not ask for.
+		renderFieldsOnly(&sb, resp.Issues, startAt, fields, now, sprintField)
+	} else {
+		// Extra columns the caller explicitly asked for (via --fields +name or
+		// --time). Derived from the request, not the fetched set: labels and
+		// components are fetched by default but only rendered when asked for.
+		extraFields := displayExtraFields(flags, spField, sprintField)
+		for i, raw := range resp.Issues {
+			n := startAt + i + 1
+			statusName := raw.Fields.Status.Name
+			statusCatKey := raw.Fields.Status.StatusCategory.Key
+			issueType := raw.Fields.IssueType.Name
+			priority := ""
+			if raw.Fields.Priority != nil {
+				priority = raw.Fields.Priority.Name
 			}
-		}
-		// Line 4 (optional): extra fields — always shown when requested, "—" when absent.
-		if len(extraFields) > 0 {
-			var parts []string
-			for _, f := range extraFields {
-				v := extractFieldValue(raw, f)
-				if v == "" {
-					v = "—"
+			assignee := "—"
+			if raw.Fields.Assignee != nil {
+				assignee = raw.Fields.Assignee.DisplayName
+			}
+			updated := parseUpdated(raw.Fields.Updated, now)
+
+			// Line 1: type badge + key + cropped summary + status right-aligned at col 110
+			sb.WriteString(titleLine(n, colorIssueType(issueType), raw.Key, raw.Fields.Summary,
+				colorStatus(statusName, statusCatKey)))
+			// Line 2: priority, assignee, updated
+			fmt.Fprintf(&sb, "    Prio: %s  Assignee: %s  Updated: %s ago\n",
+				colorPriority(priority),
+				assignee, updated)
+			// Line 3 (optional): description preview
+			if containsStr(fields, "description") {
+				if preview := descPreview(raw.Fields.Description); preview != "" {
+					fmt.Fprintf(&sb, "    %s\n", preview)
 				}
-				parts = append(parts, fmt.Sprintf("%s: %s", fieldLabel(f), v))
 			}
-			fmt.Fprintf(&sb, "    %s\n", strings.Join(parts, "  "))
+			// Line 4 (optional): extra fields — always shown when requested, "—" when absent.
+			if len(extraFields) > 0 {
+				var parts []string
+				for _, f := range extraFields {
+					v := extractFieldValue(raw, f, sprintField)
+					if v == "" {
+						v = "—"
+					}
+					parts = append(parts, fmt.Sprintf("%s: %s", fieldLabel(f, sprintField), v))
+				}
+				fmt.Fprintf(&sb, "    %s\n", strings.Join(parts, "  "))
+			}
+			sb.WriteByte('\n')
 		}
-		sb.WriteByte('\n')
 	}
 
 	// Footer: repeat the drill hint with the last item as example, then pagination.
@@ -602,7 +701,10 @@ func parseUpdated(raw string, now time.Time) string {
 
 // fieldLabel converts a Jira field ID to a display label.
 // Falls back to a title-cased version of the ID when no explicit mapping exists.
-func fieldLabel(field string) string {
+func fieldLabel(field, sprintField string) string {
+	if sprintField != "" && field == sprintField {
+		return "Sprint"
+	}
 	switch field {
 	case "resolution":
 		return "Resolution"
@@ -624,6 +726,22 @@ func fieldLabel(field string) string {
 		return "Due"
 	case "environment":
 		return "Env"
+	case "key":
+		return "Key"
+	case "summary":
+		return "Summary"
+	case "status":
+		return "Status"
+	case "issuetype":
+		return "Type"
+	case "priority":
+		return "Prio"
+	case "assignee":
+		return "Assignee"
+	case "updated":
+		return "Updated"
+	case "created":
+		return "Created"
 	}
 	return field
 }
@@ -631,7 +749,15 @@ func fieldLabel(field string) string {
 // extractFieldValue returns a display string for a named field on an IssueRaw.
 // Returns "" when the field is absent, null, or has no meaningful value.
 // Handles typed Fields struct fields and falls back to RawFields for the rest.
-func extractFieldValue(raw jira.IssueRaw, field string) string {
+func extractFieldValue(raw jira.IssueRaw, field, sprintField string) string {
+	// Sprint custom field: render names compactly rather than dumping the raw
+	// GreenHopper object/toString (e.g. "Sprint 152, Sprint 153 (active)").
+	if sprintField != "" && field == sprintField {
+		if v, ok := raw.RawFields[field]; ok {
+			return jira.FormatSprintField(v)
+		}
+		return ""
+	}
 	switch field {
 	case "resolution":
 		if raw.Fields.Resolution != nil {

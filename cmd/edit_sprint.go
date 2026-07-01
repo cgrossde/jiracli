@@ -261,11 +261,24 @@ func resolveNextSprint(ctx context.Context, client *jira.Client, store *cache.St
 }
 
 // invalidateSprintCaches purges sprint-related cache entries after a mutation.
+// The archive of immutable closed sprints (sprints/<board>/archive) is left
+// intact: moving an issue never changes a long-closed sprint's metadata, and
+// rebuilding the archive is expensive.
 func invalidateSprintCaches(store *cache.Store, keys []string) {
 	if store == nil {
 		return
 	}
-	_ = store.DeleteGlob("sprints/*")
+	// filepath.Match's "*" does not span "/", so each live cache shape is
+	// listed explicitly. "sprints/*" alone would match nothing.
+	for _, glob := range []string{
+		"sprints/*/active+future",
+		"sprints/*/closed",
+		"sprints/*/closed-all",
+		"sprints/*/names",
+		"sprints/*/default-*",
+	} {
+		_ = store.DeleteGlob(glob)
+	}
 	for _, k := range keys {
 		_ = store.Delete("issue-summary/" + k)
 	}

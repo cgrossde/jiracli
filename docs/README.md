@@ -59,7 +59,8 @@ jiracli lookup users "alex" --project PROJ
 jiracli lookup boards --project PROJ
 jiracli board show 101
 jiracli sprint current --board 101
-jiracli sprint list --board 101 --state active,future
+jiracli sprint list --board 101            # active + future + recently-closed
+jiracli sprint list --board 101 --all      # every sprint (full history)
 jiracli sprint issues 2001
 jiracli edit sprint ACME-123 current --board 101
 jiracli edit sprint ACME-123 backlog --yes

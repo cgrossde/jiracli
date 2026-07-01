@@ -116,3 +116,37 @@ func lastTrailer(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return lines[len(lines)-1]
 }
+
+func TestBuildSprintListNextCmd(t *testing.T) {
+	got := buildSprintListNextCmd(sprintListFlags{
+		Board:        101,
+		All:          true,
+		State:        "closed",
+		ClosedWithin: 30,
+		NameContains: "Q2",
+		Sort:         "desc",
+		NoCache:      true,
+	}, 3, 50)
+	for _, want := range []string{
+		"jiracli sprint list --board 101 --page 3 --limit 50",
+		"--all",
+		"--state closed",
+		"--closed-within 30",
+		`--name-contains "Q2"`,
+		"--sort desc",
+		"--no-cache",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("next-cmd missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestBuildSprintListNextCmd_defaultsOmitted(t *testing.T) {
+	got := buildSprintListNextCmd(sprintListFlags{Board: 1, ClosedWithin: 7}, 2, 50)
+	for _, unwanted := range []string{"--all", "--state", "--closed-within", "--no-cache", "--sort"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("next-cmd should omit default flag %q: %s", unwanted, got)
+		}
+	}
+}
