@@ -49,7 +49,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `cache clear` | `--profile`, `--key`, `--yes` | Purge cache entries (use `cache list` to see key names) |
 | `edit status <KEY> [KEY...] <name-or-id>` | `--profile`, `--comment`, `--yes` | Transition one or more issues; last arg is always the transition name/id |
 | `edit assignee <KEY> [KEY...] <user-or-id>` | `--profile`, `--yes` | Assign one or more issues; last arg is always the user (`-` to unassign, `me` for self) |
-| `edit field <KEY> [KEY...] <spec...>` | `--profile`, `--allow-new`, `--yes` | Update arbitrary fields on one or more issues; leading args without `=` are keys, first arg with `=` starts specs |
+| `edit field <KEY> [KEY...] <spec...>` | `--profile`, `--allow-new`, `--yes` | Update arbitrary fields; named aliases: `priority`, `labels`, `components`, `fixVersions`, `epic` (set Epic Link via stored `config hierarchy` field ID). Leading args without `=` are keys, first arg with `=` starts specs. |
 | `edit sprint <KEY> [KEY...] <target>` | `--profile`, `--board`, `--yes` | Move issues into a sprint or backlog (dry-run by default; target: numeric id, `current`, `next`, `backlog`) |
 | `board list` | `--profile`, `--project` (required), `--type` (scrum\|kanban), `--limit`, `--page`, `--json`, `--no-cache` | List Agile boards for a project (alias of `lookup boards`) |
 | `board show <id>` | `--profile`, `--project`, `--json`, `--no-cache` | Show board configuration (columns, type) |
@@ -62,7 +62,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `add link <source> <target>` | `--profile`, `--type`, `--yes` | Link two issues |
 | `add attachment <KEY> <file...>` | `--profile`, `--yes` | Upload attachments |
 | `delete <ref> [ref...]` | `--profile`, `--yes`, `--with-subtasks` | Delete issues (multi-key OK for plain keys), or single comment/attach/link by compound ref. Aliased as `rm`. Dry-run by default. |
-| `create` | `--profile`, `--init-draft`, `--from-draft`, `--project`, `--type`, `--summary`, `--description`, `--priority`, `--assignee`, `--component`, `--label`, `--fix-version`, `--custom`, `--allow-new`, `--no-cache`, `--yes` | Create issue |
+| `create` | `--profile`, `--init-draft`, `--from-draft`, `--project`, `--type`, `--summary`, `--description`, `--priority`, `--assignee`, `--epic`, `--component`, `--label`, `--fix-version`, `--custom`, `--allow-new`, `--no-cache`, `--yes` | Create issue; `--epic <KEY>` sets the Epic Link field (resolved automatically via stored `config hierarchy`) |
 
 Full usage details: `docs/` directory.
 

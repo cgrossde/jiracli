@@ -24,6 +24,7 @@ type CreateFlags struct {
 	Description string
 	Priority    string
 	Assignee    string
+	Epic        string   // epic key, resolved via Hierarchy.EpicLinkField
 	Components  []string
 	Labels      []string
 	FixVersions []string
@@ -41,6 +42,7 @@ type draftFile struct {
 	Description  string            `yaml:"description"`
 	Priority     string            `yaml:"priority"`
 	Assignee     string            `yaml:"assignee"`
+	Epic         string            `yaml:"epic"`
 	Components   []string          `yaml:"components"`
 	Labels       []string          `yaml:"labels"`
 	FixVersions  []string          `yaml:"fixVersions"`
@@ -53,6 +55,7 @@ summary: ""
 description: ""
 priority: ""
 assignee: ""
+epic: ""
 components: []
 labels: []
 fixVersions: []
@@ -88,6 +91,7 @@ func NewCreateCmd() *cobra.Command {
 	c.Flags().StringVar(&flags.Description, "description", "", "Issue description")
 	c.Flags().StringVar(&flags.Priority, "priority", "", "Priority name")
 	c.Flags().StringVar(&flags.Assignee, "assignee", "", "Assignee username or 'me'")
+	c.Flags().StringVar(&flags.Epic, "epic", "", "Epic key to link this issue to (e.g. PROJ-123)")
 	c.Flags().StringArrayVar(&flags.Components, "component", nil, "Component name (repeatable)")
 	c.Flags().StringArrayVar(&flags.Labels, "label", nil, "Label (repeatable)")
 	c.Flags().StringArrayVar(&flags.FixVersions, "fix-version", nil, "Fix version (repeatable)")
@@ -137,6 +141,9 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 		}
 		if flags.Assignee == "" {
 			flags.Assignee = d.Assignee
+		}
+		if flags.Epic == "" {
+			flags.Epic = d.Epic
 		}
 		if len(flags.Components) == 0 {
 			flags.Components = d.Components
@@ -354,6 +361,17 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 	}
 	if resolvedAssignee != "" {
 		fields["assignee"] = map[string]string{"name": resolvedAssignee}
+	}
+	if flags.Epic != "" {
+		epicFieldID := entry.Hierarchy.EpicLinkField
+		if epicFieldID == "" {
+			epicFieldID = "customfield_10014" // fallback default
+		}
+		fields[epicFieldID] = flags.Epic
+		validation = append(validation, jira.ValidationRow{
+			Status:  "✓",
+			Message: fmt.Sprintf("epic %s (via %s)", flags.Epic, epicFieldID),
+		})
 	}
 	if len(flags.Components) > 0 {
 		comps := make([]map[string]string, 0, len(flags.Components))

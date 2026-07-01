@@ -284,6 +284,7 @@ On `--yes`: executes sequentially, collecting per-key errors rather than abortin
 | `fixVersions` / `versions` | `lookup versions --project <KEY>` (1h cache) |
 | `labels` | `lookup labels --project <KEY>` (5-min cache); bypassed with `--allow-new` |
 | `assignee` | `/user/assignable/search` |
+| `epic` | Value is passed as-is; resolved to the instance's Epic Link field (`customfield_NNNNN`) from the stored `config hierarchy` profile. No server-side pre-validation. |
 
 `--allow-new` skips client-side validation for labels and versions, passing the value to the server as-is. For components, `--allow-new` skips the check but Jira itself may reject: component creation requires admin rights. Server-side rejection is surfaced verbatim with a hint to contact a project admin.
 
@@ -341,6 +342,7 @@ jiracli edit field ACME-123 "labels+=regression" "labels-=stale"
 jiracli edit field ACME-123 "description=@desc.md"
 jiracli edit field ACME-123 "assignee=-"
 jiracli edit field ACME-123 "fixVersions+=4.5.0" --allow-new
+jiracli edit field ACME-123 "epic=PROJ-42"
 ```
 
 ---
@@ -447,6 +449,7 @@ Creates a new issue. Dry-run by default.
 | `--description <text>` | Issue description |
 | `--priority <name>` | Priority |
 | `--assignee <user>` | Assignee username or `me` |
+| `--epic <KEY>` | Epic key to link this issue to (e.g. `PROJ-123`); resolved via the instance's Epic Link field (auto-discovered from `config hierarchy`) |
 | `--component <name>` | Component name (repeatable) |
 | `--label <label>` | Label (repeatable) |
 | `--fix-version <v>` | Fix version (repeatable) |
@@ -474,6 +477,7 @@ summary: ""
 description: ""
 priority: ""
 assignee: ""
+epic: ""
 components: []
 labels: []
 fixVersions: []

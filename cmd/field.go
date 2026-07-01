@@ -307,6 +307,21 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 			})
 			effectLines = append(effectLines, fmt.Sprintf("fixVersions %s %s", spec.Op.String(), value))
 
+		case "epic":
+			if spec.Op != jira.OpReplace {
+				return "", fmt.Errorf("epic is single-value — use epic=<EPIC-KEY>")
+			}
+			epicFieldID := entry.Hierarchy.EpicLinkField
+			if epicFieldID == "" {
+				epicFieldID = "customfield_10014" // fallback default
+			}
+			fieldsBlock[epicFieldID] = value
+			validation = append(validation, jira.ValidationRow{
+				Status:  "✓",
+				Message: fmt.Sprintf("epic %s (via %s)", value, epicFieldID),
+			})
+			effectLines = append(effectLines, fmt.Sprintf("epic → %s", value))
+
 		default:
 			// Generic scalar field — place in fields block as a plain string.
 			fieldsBlock[fieldName] = value
