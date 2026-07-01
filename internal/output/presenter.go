@@ -111,8 +111,10 @@ func overflow(stdout string) string {
 	return b.String()
 }
 
-// writeTempFile writes content to a uniquely named file under /tmp/<toolName>-output/
-// and returns the path. Returns empty string on error.
+// writeTempFile writes content to a uniquely named file under
+// os.TempDir()/<toolName>-output/ (e.g. /tmp/<toolName>-output/ on Linux;
+// $TMPDIR/<toolName>-output/ on macOS, since macOS's per-user TMPDIR is not
+// /tmp) and returns the path. Returns empty string on error.
 func writeTempFile(content string) string {
 	dir := filepath.Join(os.TempDir(), toolName+"-output")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

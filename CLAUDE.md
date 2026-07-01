@@ -99,7 +99,9 @@ Help output is scoped to the kind of failure:
 ### Overflow (progressive disclosure)
 
 Output exceeding **~200 lines or ~50 KB** is automatically truncated. Full
-content at `/tmp/jiracli-output/output-N.txt`.
+content at `<tmpdir>/jiracli-output/output-N.txt`, where `<tmpdir>` is the OS
+temp directory (`/tmp` on Linux, `$TMPDIR` on macOS — not `/tmp`). The
+truncation notice always prints the real resolved path.
 
 ### JSON mode (`--json`)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -367,6 +368,23 @@ var truncateField = map[string]bool{
 	"summary":     true,
 }
 
+// timeTrackingField lists changelog field names whose from/to values are raw
+// seconds (Jira's changelog reports these as the display name, not the field
+// ID). Matched case-insensitively in isTimeTrackingField.
+var timeTrackingField = map[string]bool{
+	"timeestimate":           true,
+	"remaining estimate":     true,
+	"timeoriginalestimate":   true,
+	"original estimate":      true,
+	"original time estimate": true,
+	"timespent":              true,
+	"time spent":             true,
+}
+
+func isTimeTrackingField(field string) bool {
+	return timeTrackingField[strings.ToLower(field)]
+}
+
 // AbbreviateChange renders a single field change for the activity timeline.
 //
 // Rules:
@@ -403,6 +421,18 @@ func AbbreviateChange(field, from, to string, statusMarker string) string {
 	if truncateField[field] {
 		from = TruncateString(from, activityTruncateLen)
 		to = TruncateString(to, activityTruncateLen)
+	}
+
+	// Time-tracking fields: Jira's changelog reports these as raw seconds
+	// (e.g. "39600 → 10800"); render them the same human-readable way as
+	// everywhere else in the CLI (e.g. "11h → 3h").
+	if isTimeTrackingField(field) {
+		if secs, err := strconv.ParseInt(from, 10, 64); err == nil {
+			from = FormatSeconds(secs)
+		}
+		if secs, err := strconv.ParseInt(to, 10, 64); err == nil {
+			to = FormatSeconds(secs)
+		}
 	}
 
 	// Normal render.

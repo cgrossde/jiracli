@@ -73,7 +73,8 @@ func Transition(ctx context.Context, flags TransitionFlags, key, nameOrID string
 	// Fetch current status for display and validation rows.
 	raw, err := client.GetIssue(ctx, key, "status", false)
 	if err != nil {
-		return "", fmt.Errorf("fetch issue %s: %w", key, err)
+		// GetIssue's error already carries "fetch issue <key>: ..." context.
+		return "", err
 	}
 	currentStatus := raw.Fields.Status.Name
 

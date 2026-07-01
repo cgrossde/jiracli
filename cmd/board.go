@@ -158,7 +158,8 @@ func boardShow(ctx context.Context, flags boardShowFlags, idOrName string) (stri
 
 	cfg, err := client.GetBoardConfigCached(ctx, boardID, store, flags.NoCache)
 	if err != nil {
-		return "", fmt.Errorf("board config: %w", err)
+		// GetBoardConfig's error already carries "board config: ..." context.
+		return "", err
 	}
 
 	if flags.JSON {

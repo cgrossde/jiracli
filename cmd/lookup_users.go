@@ -67,19 +67,11 @@ func lookupUsers(ctx context.Context, flags lookupUsersFlags, q string) (string,
 
 	// Jira DC's query param is a hint and may not filter server-side.
 	// Apply client-side substring filter on name/displayName/email when a
-	// query was provided.
-	if q != "" {
-		ql := strings.ToLower(q)
-		filtered := users[:0]
-		for _, u := range users {
-			if strings.Contains(strings.ToLower(u.Name), ql) ||
-				strings.Contains(strings.ToLower(u.DisplayName), ql) ||
-				strings.Contains(strings.ToLower(u.EmailAddress), ql) {
-				filtered = append(filtered, u)
-			}
-		}
-		users = filtered
-	}
+	// query was provided. (SearchAssignableUsers already does this
+	// internally with a broader candidate pool; re-applying here is a
+	// no-op in that case and is required for the no-project SearchUsers
+	// path, which does not.)
+	users = jira.FilterUsersByQuery(users, q)
 
 	if flags.JSON {
 		var sb strings.Builder

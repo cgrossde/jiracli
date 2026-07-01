@@ -253,6 +253,16 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 		return fmt.Errorf("board %d is kanban and does not support sprints — use: jiracli board issues %d", flags.Board, flags.Board)
 	}
 
+	// Explicitly check board type up front. The default view's fast path
+	// (ListSprintNames, the legacy GreenHopper sprintquery endpoint) does not
+	// reliably reject kanban boards the way the modern agile/1.0 sprint
+	// endpoint does — it can return leftover/stale sprint records for a board
+	// that is now kanban. A cheap, cached board-config lookup catches this
+	// consistently on every path, matching `sprint current`'s behavior.
+	if cfg, cfgErr := client.GetBoardConfigCached(ctx, flags.Board, store, flags.NoCache); cfgErr == nil && strings.EqualFold(cfg.Type, "kanban") {
+		return "", kanbanErr()
+	}
+
 	hasDateFilter := flags.After != "" || flags.Before != ""
 	// The recency window drives the default view. It is disabled by --all, by an
 	// explicit --state all, or by a date-range filter (which defines its own
@@ -402,7 +412,8 @@ func sprintShow(ctx context.Context, flags sprintShowFlags, idStr string) (strin
 
 	spr, err := client.GetSprint(ctx, sprintID)
 	if err != nil {
-		return "", fmt.Errorf("get sprint: %w", err)
+		// GetSprint's error already carries "get sprint: ..." context.
+		return "", err
 	}
 
 	if flags.JSON {

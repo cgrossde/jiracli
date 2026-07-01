@@ -71,4 +71,4 @@ jiracli config agile
 
 ## Output contract
 
-All commands write to stdout with a trailing `[exit:0 | Xms]` footer. Pass `--json` for stable NDJSON output (footer suppressed). Outputs over ~200 lines or ~50 KB are truncated to `/tmp/jiracli-output/output-N.txt` with exploration hints.
+All commands write to stdout with a trailing `[exit:0 | Xms]` footer. Pass `--json` for stable NDJSON output (footer suppressed). Outputs over ~200 lines or ~50 KB are truncated to `<tmpdir>/jiracli-output/output-N.txt` (`<tmpdir>` = OS temp dir: `/tmp` on Linux, `$TMPDIR` on macOS) with exploration hints showing the real path.

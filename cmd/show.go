@@ -97,18 +97,23 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 			}
 
 			multi := len(refs) > 1
+			var failed []string
 			for i, rawRef := range refs {
 				ref, err := jira.ParseRef(rawRef)
 				if err != nil {
 					if multi {
 						fmt.Fprintf(cmd.OutOrStdout(), "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ %s (%d/%d)\n", rawRef, i+1, len(refs))
 						fmt.Fprintf(cmd.OutOrStdout(), "error: invalid ref %q: %v\n\n", rawRef, err)
+						failed = append(failed, rawRef)
 						continue
 					}
 					return fmt.Errorf("invalid ref %q: %w", rawRef, err)
 				}
 				if multi {
-					fmt.Fprintf(cmd.OutOrStdout(), "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ %s (%d/%d)\n", ref.Key, i+1, len(refs))
+					// Use the raw ref, not ref.Key, so compound refs
+					// (KEY:attach:ID, KEY:comment:ID) keep their full shape
+					// in the header instead of being stripped to the bare key.
+					fmt.Fprintf(cmd.OutOrStdout(), "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ %s (%d/%d)\n", rawRef, i+1, len(refs))
 				}
 				switch ref.Kind {
 				case jira.RefIssue:
@@ -116,6 +121,7 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 					if err != nil {
 						if multi {
 							fmt.Fprintf(cmd.OutOrStdout(), "error: %v\n\n", err)
+							failed = append(failed, ref.Key)
 							continue
 						}
 						return err
@@ -146,6 +152,9 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 					}
 					fmt.Fprint(cmd.OutOrStdout(), result)
 				}
+			}
+			if len(failed) > 0 {
+				return fmt.Errorf("%d of %d ref(s) failed: %s", len(failed), len(refs), strings.Join(failed, ", "))
 			}
 			return nil
 		},

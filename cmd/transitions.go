@@ -58,7 +58,8 @@ func Transitions(ctx context.Context, flags TransitionsFlags, key string) (strin
 	// Fetch current status for display.
 	raw, err := client.GetIssue(ctx, key, "status", false)
 	if err != nil {
-		return "", fmt.Errorf("fetch issue %s: %w", key, err)
+		// GetIssue's error already carries "fetch issue <key>: ..." context.
+		return "", err
 	}
 	currentStatus := raw.Fields.Status.Name
 

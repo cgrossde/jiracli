@@ -216,7 +216,7 @@ Run `jiracli add --help` and `jiracli delete --help` for more.
 
 **Filter on `statusCategory`, not status name.** Status names vary by project. The three universal values are `"To Do"`, `"In Progress"`, `"Done"`. Use these in JQL.
 
-**Truncated output** (>200 lines) is written to `/tmp/jiracli-output/output-N.txt` with exploration hints inline. Use `grep`/`head`/`tail` on that file rather than re-running.
+**Truncated output** (>200 lines) is written to `<tmpdir>/jiracli-output/output-N.txt` with exploration hints inline (`<tmpdir>` is the OS temp dir — `/tmp` on Linux, `$TMPDIR` on macOS; the printed hint always shows the real path). Use `grep`/`head`/`tail` on that file rather than re-running.
 
 **When in doubt, run `--help`.** `jiracli --help`, `jiracli <command> --help`, and `jiracli <command> <subcommand> --help` are always up to date and cover every flag. The skill covers the most common cases; help covers everything.
 

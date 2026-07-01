@@ -179,7 +179,7 @@ jiracli open PROJ-123 --print-url    # just the URL, don't open
 | Plain text | default | Human-readable, `[exit:0 \| Xms]` footer |
 | NDJSON | `--json` | One JSON object per line, no footer, stable v1 schema |
 
-Large outputs (>200 lines or >50 KB) are automatically written to `/tmp/jiracli-output/output-N.txt` with exploration hints inline. `--json` is never truncated.
+Large outputs (>200 lines or >50 KB) are automatically written to `<tmpdir>/jiracli-output/output-N.txt` with exploration hints inline (`<tmpdir>` is the OS temp dir — `/tmp` on Linux, `$TMPDIR` on macOS; the hint always shows the real resolved path). `--json` is never truncated.
 
 NDJSON schema reference: [`docs/json-schema.md`](docs/json-schema.md)
 

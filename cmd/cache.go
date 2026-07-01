@@ -75,9 +75,19 @@ func cacheList(flags cacheListFlags) (string, error) {
 		var sb strings.Builder
 		for _, e := range entries {
 			rec := struct {
-				Key     string `json:"key"`
-				SavedAt string `json:"savedAt"`
-			}{e.Key, e.SavedAt.UTC().Format(time.RFC3339)}
+				Key       string `json:"key"`
+				SavedAt   string `json:"savedAt"`
+				TTL       string `json:"ttl,omitempty"`
+				ExpiresAt string `json:"expiresAt,omitempty"`
+				Expired   *bool  `json:"expired,omitempty"`
+			}{Key: e.Key, SavedAt: e.SavedAt.UTC().Format(time.RFC3339)}
+			if ttl, ok := cacheKeyTTL(e.Key); ok {
+				expiresAt := e.SavedAt.Add(ttl)
+				expired := now.After(expiresAt)
+				rec.TTL = ttl.String()
+				rec.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+				rec.Expired = &expired
+			}
 			data, _ := json.Marshal(rec)
 			sb.Write(data)
 			sb.WriteByte('\n')
@@ -88,9 +98,72 @@ func cacheList(flags cacheListFlags) (string, error) {
 	var sb strings.Builder
 	for _, e := range entries {
 		age := jira.FormatRelative(e.SavedAt, now)
-		sb.WriteString(fmt.Sprintf("%-40s  saved %s ago\n", e.Key, age))
+		line := fmt.Sprintf("%-40s  saved %s ago", e.Key, age)
+		if ttl, ok := cacheKeyTTL(e.Key); ok {
+			expiresAt := e.SavedAt.Add(ttl)
+			if now.After(expiresAt) {
+				line += fmt.Sprintf("    ttl %-10s    expired %s ago", ttl, jira.FormatRelative(expiresAt, now))
+			} else {
+				line += fmt.Sprintf("    ttl %-10s    expires in %s", ttl, expiresAt.Sub(now).Round(time.Second))
+			}
+		}
+		sb.WriteString(line + "\n")
 	}
 	return sb.String(), nil
+}
+
+// cacheKeyTTL returns the TTL governing a cache key, mirroring the exact key
+// patterns used by the internal/jira cache call sites. Order matters: more
+// specific patterns (e.g. the "/priorityscheme" suffix under "project/") are
+// checked before the more general prefix they'd otherwise also match.
+// Returns (0, false) for a key with no known TTL mapping (e.g. a stale key
+// left by a since-removed cache call site).
+func cacheKeyTTL(key string) (time.Duration, bool) {
+	switch key {
+	case "fields":
+		return jira.TTLFields, true
+	case "projects":
+		return jira.TTLProjects, true
+	case "statuses":
+		return jira.TTLStatuses, true
+	case "issuetypes":
+		return jira.TTLIssueTypes, true
+	case "priorities":
+		return jira.TTLPriorities, true
+	case "linktypes":
+		return jira.TTLLinkTypes, true
+	case "myself":
+		return jira.TTLMyself, true
+	}
+	switch {
+	case strings.HasPrefix(key, "issue-summary/"):
+		return jira.TTLIssueSummary, true
+	case strings.HasPrefix(key, "issuetypes/"):
+		return jira.TTLIssueTypes, true
+	case strings.HasPrefix(key, "createmeta/"):
+		return jira.TTLCreateMeta, true
+	case strings.HasSuffix(key, "/priorityscheme"):
+		return jira.TTLPrioritySchm, true
+	case strings.HasPrefix(key, "project/"):
+		return jira.TTLProject, true
+	case strings.HasPrefix(key, "labels/"):
+		return jira.TTLLabels, true
+	case strings.HasPrefix(key, "boards/"):
+		return jira.TTLBoards, true
+	case strings.HasPrefix(key, "board/") && strings.HasSuffix(key, "/config"):
+		return jira.TTLBoardConfig, true
+	case strings.HasPrefix(key, "sprints/") && strings.HasSuffix(key, "/archive"):
+		return jira.TTLSprintArchive, true
+	case strings.HasPrefix(key, "sprints/") && strings.HasSuffix(key, "/active+future"):
+		return jira.TTLSprintsActive, true
+	case strings.HasPrefix(key, "sprints/") && strings.HasSuffix(key, "/names"):
+		return jira.TTLSprintsActive, true
+	case strings.HasPrefix(key, "sprints/") && strings.Contains(key, "/default-"):
+		return jira.TTLSprintsActive, true
+	case strings.HasPrefix(key, "sprints/") && (strings.HasSuffix(key, "/closed") || strings.HasSuffix(key, "/closed-all")):
+		return jira.TTLSprintsClosed, true
+	}
+	return 0, false
 }
 
 // ── cache clear ───────────────────────────────────────────────────────────────

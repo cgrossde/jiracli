@@ -1365,4 +1365,4 @@ All paginated commands (`search`, `comments`, `history`, `assigned`) emit a foot
 - More pages exist: `--- page M of N | next: jiracli <cmd> --page <M+1> [flags] "<args>" ---`
 - Last page: `--- page M of N ---`
 
-Outputs exceeding ~200 lines or ~50 KB are truncated; the full content is written to `/tmp/jiracli-output/output-N.txt`. The truncated output includes hints to use `grep`, `head`, or `tail` on that file.
+Outputs exceeding ~200 lines or ~50 KB are truncated; the full content is written to `<tmpdir>/jiracli-output/output-N.txt`, where `<tmpdir>` is the OS temp directory — `/tmp` on Linux, but a per-user `$TMPDIR` path on macOS (not `/tmp`). The truncated output includes hints with the actual resolved path to use `grep`, `head`, or `tail` on that file.

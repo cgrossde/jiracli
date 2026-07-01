@@ -50,7 +50,8 @@ func Attachments(ctx context.Context, flags AttachmentsFlags, key string) (strin
 
 	raw, err := client.GetIssue(ctx, key, "attachment", false)
 	if err != nil {
-		return "", fmt.Errorf("fetch issue %s: %w", key, err)
+		// GetIssue's error already carries "fetch issue <key>: ..." context.
+		return "", err
 	}
 
 	if len(raw.Fields.Attachment) == 0 {

@@ -218,6 +218,34 @@ func TestAbbreviateChange(t *testing.T) {
 			field: "labels", from: "", to: "mobile",
 			want: "labels: → mobile",
 		},
+		// time-tracking fields — Jira's changelog reports raw seconds; these
+		// should render the same human-readable units as everywhere else.
+		{
+			// 39600s = 11h = 1 workday (8h) + 3h under Jira's default workday convention.
+			name:  "timeestimate raw seconds formatted",
+			field: "timeestimate", from: "39600", to: "10800",
+			want: "timeestimate: 1d3h → 3h",
+		},
+		{
+			name:  "Remaining Estimate display-name variant formatted",
+			field: "Remaining Estimate", from: "39600", to: "10800",
+			want: "Remaining Estimate: 1d3h → 3h",
+		},
+		{
+			name:  "timeoriginalestimate formatted",
+			field: "timeoriginalestimate", from: "", to: "28800",
+			want: "timeoriginalestimate: → 1d",
+		},
+		{
+			name:  "timespent formatted",
+			field: "timespent", from: "0", to: "3600",
+			want: "timespent: → 1h",
+		},
+		{
+			name:  "non-numeric time-tracking value left as-is",
+			field: "timeestimate", from: "n/a", to: "10800",
+			want: "timeestimate: n/a → 3h",
+		},
 	}
 
 	for _, tc := range tests {

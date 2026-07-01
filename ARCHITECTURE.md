@@ -63,8 +63,8 @@ This is the core mechanism that makes LLM consumption safe. Without it, a single
 **Behaviour:**
 
 1. Truncate to the first 200 lines (rune-safe split — no broken UTF-8 mid-character)
-2. Write the **complete, unmodified** output to `/tmp/jiracli-output/output-N.txt`
-3. Append an overflow notice with ready-to-run exploration commands
+2. Write the **complete, unmodified** output to `<tmpdir>/jiracli-output/output-N.txt`, where `<tmpdir>` is the OS temp directory (`os.TempDir()`) — `/tmp` on Linux, but a per-user `$TMPDIR` path on macOS (e.g. `/var/folders/.../T`), **not** `/tmp`
+3. Append an overflow notice with ready-to-run exploration commands, using the actual resolved path
 
 ```
 [first 200 lines of output, verbatim]
@@ -76,13 +76,15 @@ Explore:     cat /tmp/jiracli-output/output-3.txt | grep <pattern>
 Narrow:      jiracli <command> --help
 ```
 
+(The example above shows the Linux path; on macOS the printed hint uses the real `$TMPDIR`-based path instead — always read the hint rather than assuming `/tmp`.)
+
 **Why this works:** The agent already knows `grep`, `head`, `tail`, `wc`. Overflow converts a context-budget problem into a navigation skill the agent already has. The full data is never lost — it's one `cat` away. The agent can:
 - `grep` for a keyword to find relevant lines
 - `tail` to see the end of the output
 - `head -n 50` a section after finding a line number
 - Re-run the command with narrower flags to reduce output at the source
 
-**Implementation:** `internal/output/presenter.go` — the `overflow()` function. The temp directory uses the tool name (`/tmp/jiracli-output/`) and a monotonically increasing counter for unique file names within a process lifetime. Files are world-readable (`0600`) and persist until system reboot or explicit cleanup. ANSI escape sequences are stripped from the file content so `grep`, `cat`, and LLM tools work cleanly on it — the displayed (truncated) lines retain their ANSI for terminal rendering.
+**Implementation:** `internal/output/presenter.go` — the `overflow()` function. The temp directory is `os.TempDir()` joined with the tool name (`<tmpdir>/jiracli-output/`) and a monotonically increasing counter for unique file names within a process lifetime. Files are owner-only readable (`0600`) and persist until system reboot or explicit cleanup. ANSI escape sequences are stripped from the file content so `grep`, `cat`, and LLM tools work cleanly on it — the displayed (truncated) lines retain their ANSI for terminal rendering.
 
 **Not applied in JSON mode.** When `--json` is set, overflow is bypassed entirely. Scripts handle their own pagination and memory management.
 

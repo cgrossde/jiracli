@@ -211,9 +211,11 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	addCmd.GroupID = "main"
 	root.AddCommand(addCmd)
 
-	// delete group — delete an issue or sub-object. Aliased as "rm".
+	// delete — delete an issue or sub-object. Aliased as "rm". This is a leaf
+	// command (no subcommands), so wrapGroup (which only wraps children)
+	// would be a no-op — it must be wrapped directly like search/open/create.
 	deleteCmd := jiracmd.NewDeleteCmd()
-	wrapGroup(deleteCmd)
+	WrapWithPresenter(deleteCmd, stdout, stderr)
 	deleteCmd.GroupID = "main"
 	root.AddCommand(deleteCmd)
 

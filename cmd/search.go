@@ -630,23 +630,34 @@ func renderSearchPlain(resp jira.SearchResponse, effectiveJQL, originalJQL strin
 			statusName := raw.Fields.Status.Name
 			statusCatKey := raw.Fields.Status.StatusCategory.Key
 			issueType := raw.Fields.IssueType.Name
-			priority := ""
-			if raw.Fields.Priority != nil {
-				priority = raw.Fields.Priority.Name
-			}
-			assignee := "—"
-			if raw.Fields.Assignee != nil {
-				assignee = raw.Fields.Assignee.DisplayName
-			}
-			updated := parseUpdated(raw.Fields.Updated, now)
 
 			// Line 1: type badge + key + cropped summary + status right-aligned at col 110
 			sb.WriteString(titleLine(n, colorIssueType(issueType), raw.Key, raw.Fields.Summary,
 				colorStatus(statusName, statusCatKey)))
-			// Line 2: priority, assignee, updated
-			fmt.Fprintf(&sb, "    Prio: %s  Assignee: %s  Updated: %s ago\n",
-				colorPriority(priority),
-				assignee, updated)
+			// Line 2: priority, assignee, updated — each column is omitted when
+			// the caller dropped it via --fields "-priority"/"-assignee"/"-updated"
+			// rather than rendered with an empty/dash value.
+			var line2 []string
+			if containsStr(fields, "priority") {
+				priority := ""
+				if raw.Fields.Priority != nil {
+					priority = raw.Fields.Priority.Name
+				}
+				line2 = append(line2, fmt.Sprintf("Prio: %s", colorPriority(priority)))
+			}
+			if containsStr(fields, "assignee") {
+				assignee := "—"
+				if raw.Fields.Assignee != nil {
+					assignee = raw.Fields.Assignee.DisplayName
+				}
+				line2 = append(line2, fmt.Sprintf("Assignee: %s", assignee))
+			}
+			if containsStr(fields, "updated") {
+				line2 = append(line2, fmt.Sprintf("Updated: %s ago", parseUpdated(raw.Fields.Updated, now)))
+			}
+			if len(line2) > 0 {
+				fmt.Fprintf(&sb, "    %s\n", strings.Join(line2, "  "))
+			}
 			// Line 3 (optional): description preview
 			if containsStr(fields, "description") {
 				if preview := descPreview(raw.Fields.Description); preview != "" {
@@ -1027,9 +1038,11 @@ func countByFromRawSearch(ctx context.Context, client *jira.Client, jql, dim str
 		}
 		page++
 	}
-	if total == 0 {
-		return fmt.Sprintf("no issues matched: %s\n", jql), nil
-	}
+	// Zero matches: fall through to the normal renderers (same header/table
+	// shape as a non-empty result, just with a 0 total) rather than a
+	// bespoke message — this matches plain `search`, which always shows its
+	// "total: 0" header rather than swapping in different prose for the
+	// empty case.
 	if asJSON {
 		return renderCountByJSON(dim, order, counts, total, jql, truncated)
 	}
