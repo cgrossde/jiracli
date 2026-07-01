@@ -151,7 +151,7 @@ Update only when:
 
 ### `docs/reads.md`
 
-Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show transitions`, `show attachments`, `show hierarchy`, `search`, `open`, `auth status`.
+Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show transitions`, `show attachments`, `hierarchy`, `effort`, `search`, `open`, `auth status`.
 
 **Flags section** — one row per flag in a Markdown table:
 ```
@@ -205,7 +205,7 @@ After editing, re-read each changed doc:
 Print a one-line summary per file touched:
 
 ```
-CLAUDE.md              — updated: show hierarchy now lists all 8 flags
+CLAUDE.md              — updated: hierarchy now lists all 8 flags
 docs/reads.md          — updated: hierarchy --open/--flat/--since sections; fixed JSON block; truncation note
 docs/json-schema.md    — updated: hierarchy descendantsTruncated + flat mode; search description/reporter/fixVersions
 ARCHITECTURE.md        — updated: hierarchy.go and hierarchy_render.go package map entries

@@ -38,8 +38,7 @@ Validation:
   ⚠ <warning>
   ✗ <hard failure — blocks apply>
 
-To apply:
-  re-run with --yes
+Apply with: re-run with --yes
 [exit:0 | Xms]
 ```
 
@@ -393,8 +392,7 @@ Validation:
   ✓ sprint 2001 is active
   ⚠ sprint started 7d ago — late-add
 
-To apply:
-  re-run with --yes
+Apply with: re-run with --yes
 ```
 
 For `backlog` target:

@@ -84,9 +84,9 @@ Full reference: **[`docs/`](docs/README.md)** — setup, read commands, writes, 
 ### Reading issues
 
 ```sh
-jiracli show PROJ-123                          # full issue with activity
+jiracli show PROJ-123                          # full issue with activity (inlines latest comment)
 jiracli show PROJ-123 --no-history             # skip changelog
-jiracli show PROJ-123 --comments 5             # inline last 5 comments
+jiracli show PROJ-123 --no-comments            # skip the comment preview
 jiracli show PROJ-123 --fields "description"  # add description to the default view
 
 jiracli show comments PROJ-123                 # full comment thread
@@ -100,11 +100,11 @@ jiracli show PROJ-123:attach:10042 -o          # stream attachment to stdout
 
 ```sh
 jiracli show assigned                                        # open issues assigned to you
-jiracli show assigned --category in-progress                 # narrow by status category
+jiracli show assigned --state in-progress                    # narrow by status category
 
 jiracli search "project = PROJ AND priority = High"
 jiracli search "project = PROJ" --assigned --limit 20
-jiracli search "project = PROJ AND issuetype = Bug" --category done --include-done
+jiracli search "project = PROJ AND issuetype = Bug" --state done
 ```
 
 The effective JQL is echoed on the first line. The default filter excludes `Done` issues — pass `--include-done` to lift it.
@@ -138,8 +138,7 @@ Effect:
 Validation:
   ✓ transition 31 "In Review" is available on PROJ-123
 
-To apply:
-  re-run with --yes
+Apply with: re-run with --yes
 ```
 
 ### Creating issues

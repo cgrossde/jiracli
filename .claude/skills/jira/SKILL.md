@@ -35,10 +35,10 @@ jiracli show transitions PROJ-123           # available statuses before transiti
 jiracli show comments PROJ-123             # full comment thread
 jiracli show history PROJ-123              # changelog
 jiracli show PROJ-123 --parent             # show the immediate parent (one level only)
-jiracli show hierarchy PROJ-123            # full upward chain: Story → Epic → Initiative/Portfolio (use this for hierarchy lookups)
+jiracli hierarchy PROJ-123                 # locate up (Story → Epic → Initiative) + list children down (add --depth N)
 jiracli open PROJ-123 --print-url          # get the browse URL without opening a browser
 ```
-Run `jiracli show --help` for all flags and subcommands (`--no-history`, `--comments N`, `--fields`, and more).
+Run `jiracli show --help` for all flags and subcommands (`--no-history`, `--no-comments`, `--fields`, and more).
 
 **`show KEY1 KEY2 … KEY-N` is serial and slow.** Each key is a separate API call. For status-only lookups across many keys, prefer a single `search` call instead — it is one round-trip regardless of result count:
 ```sh
@@ -53,11 +53,11 @@ Reserve multi-key `show` for when you need the full issue detail (description, c
 ### Search
 ```sh
 jiracli search "project = PROJ AND priority = High"
-jiracli search "project = PROJ" --assigned --exclude-done
+jiracli search "project = PROJ" --exclude-done                   # or --open (alias)
 jiracli search --jql 'text ~ "some phrase" AND project = PROJ'   # use --jql for quoted literals
 jiracli search --keys-only --assigned | jiracli show -            # pipe keys into show
 ```
-All issues are returned by default **including Done** — use `--exclude-done` to hide them. The effective JQL is echoed on the first output line; read it to confirm the query.
+Bare JQL / `--jql` queries return all issues by default **including Done** — use `--exclude-done` (alias `--open`) to hide them. **`--assigned` is the exception: on its own it excludes Done** — add `--state all` to include Done. The effective JQL is echoed on the first output line; read it to confirm the query.
 
 **Use `--jql` whenever the JQL contains quoted string literals** (`text ~ "term"`, `summary ~ "foo bar"`). Shell quoting mangles positional args; `--jql` passes the whole query as one string.
 
@@ -100,49 +100,51 @@ jiracli create --from-draft new-issue.yaml --yes
 ```
 Run `jiracli create --help` for all fields.
 
-### Hierarchy & rollup
+### Hierarchy & effort
+Both are top-level commands (not under `show`). They share a filter vocabulary with `search`: `--exclude-done` / `--open` (alias) / `--state todo|in-progress|done|all`. `hierarchy` and `effort` additionally accept `--since` (`search` does not).
+
+`hierarchy` maps an issue **both ways**: **up** the parent chain (Story → Epic → Initiative/portfolio) to locate where it sits, and **down** through descendants (with `--depth`) to list everything nested under an Initiative or Epic.
 ```sh
-jiracli show hierarchy PROJ-123            # tree: Initiative → Epic → Stories
-jiracli show hierarchy PROJ-123 --open     # non-Done issues only
-jiracli show hierarchy PROJ-123 --depth 2  # two levels of descendants
-jiracli show rollup    PROJ-123            # aggregate time + story points across children
-jiracli show rollup    PROJ-123 --list     # per-child breakdown
-jiracli show rollup    PROJ-123 --depth 2  # include grandchildren
-jiracli show rollup    PROJ-123 --limit 500  # fetch up to 500 children (default cap is 100)
-jiracli show rollup    PROJ-123 --all      # fetch all children, no cap
-# JQL/sprint mode — no hierarchy config needed
-jiracli show rollup --sprint 12345 --group-by assignee   # time breakdown per person
-jiracli show rollup --sprint 12345                       # single Total row
-jiracli show rollup --jql 'project = PROJ AND updated >= "2026-04-01"'
-jiracli show rollup PROJ-123 --group-by status           # direct children by status (1 table)
-jiracli show rollup PROJ-123 --group-by status --depth 2 # + grandchildren by status (2 tables)
-jiracli show rollup PROJ-123 --group-by status --depth 2 --list  # + per-issue children under each table
+jiracli hierarchy PROJ-123            # locate: full chain Story → Epic → Initiative + direct children
+jiracli hierarchy INIT-42 --depth 3   # list everything under an initiative (epics → stories → sub-tasks)
+jiracli hierarchy PROJ-123 --open     # non-Done issues only (alias for --exclude-done)
+jiracli hierarchy PROJ-123 --state in-progress  # only In Progress nodes
+jiracli hierarchy PROJ-123 --depth 2  # two levels of descendants
+jiracli effort    PROJ-123            # aggregate time + story points across children (totals only)
+jiracli effort    PROJ-123 --depth 2  # include grandchildren
+jiracli effort    PROJ-123 --limit 500  # fetch up to 500 children (default cap is 100)
+jiracli effort    PROJ-123 --all      # fetch all children, no cap
+jiracli effort    PROJ-123 --group-by status            # direct children by status (1 table)
+jiracli effort    PROJ-123 --group-by status --depth 2  # + grandchildren by status (2 tables)
+# jql / sprint subcommands — flat aggregation over a result set, no hierarchy config needed
+jiracli effort sprint 12345 --group-by assignee   # time breakdown per person
+jiracli effort sprint 12345                        # single Total row
+jiracli effort jql 'project = PROJ AND updated >= "2026-04-01"'
 ```
-Works on any issue type — Epic aggregates its Stories; Initiative/Portfolio aggregates its Epics. Use `jiracli show rollup INIT-123 --list` to see how much time was planned, spent, and remaining across all epics in an initiative. Requires hierarchy fields to be configured (`jiracli setup`). Run `jiracli show hierarchy --help` and `jiracli show rollup --help` for more.
+`effort <KEY>` works on any issue type — Epic aggregates its Stories; Initiative/Portfolio aggregates its Epics. It reports **totals only**; for a per-child breakdown use `jiracli hierarchy KEY`. Hierarchy mode requires hierarchy fields to be configured (`jiracli setup`); the `jql`/`sprint` subcommands do not. Run `jiracli effort --help`, `jiracli effort jql --help`, `jiracli effort sprint --help` for more.
 
-**For full downward traversal (initiative → all epics → all stories), use `jiracli show hierarchy KEY --depth N --status open|closed|not-closed`.** It returns a tree with status per node — one call replaces a manual `rollup --list` plus per-child status lookup.
+**Three modes, split into subcommands because they are genuinely different:** `effort <KEY>` walks a hierarchy; `effort jql '<query>'` and `effort sprint <id>` aggregate flatly over a result set (and support `--group-by assignee`, which hierarchy mode does not).
 
-**`show rollup --jql` is the primary aggregation primitive for manager-level queries.** When asked for time spent, remaining, or budget health across any slice of work — a quarter, a label, a team, a fix version — reach for this first. It is a single call that replaces many individual rollup lookups:
+**For full downward traversal (initiative → all epics → all stories), use `jiracli hierarchy KEY --depth N --state open|done|all`.** It returns a tree with status per node — one call gives both the structure and per-child status.
+
+**`effort jql` is the primary aggregation primitive for manager-level queries.** When asked for time spent, remaining, or budget health across any slice of work — a quarter, a label, a team, a fix version — reach for this first. It is a single call that replaces many individual effort lookups:
 ```sh
 # Budget across all epics targeting a fix version (e.g. a quarter's commitment)
-jiracli show rollup --jql 'issueType = Epic AND fixVersion = "v2026-Q2"'
+jiracli effort jql 'issueType = Epic AND fixVersion = "v2026-Q2"'
 
 # Counts and time per status across a quarter's commitment
-jiracli show rollup --jql 'issueType = Epic AND fixVersion = "v2026-Q2"' --group-by status
+jiracli effort jql 'issueType = Epic AND fixVersion = "v2026-Q2"' --group-by status
 
 # Coarser breakdown — only To Do / In Progress / Done
-jiracli show rollup --jql 'project = PROJ AND ...' --group-by statusCategory
+jiracli effort jql 'project = PROJ AND ...' --group-by statusCategory
 
 # Budget per assignee across a sprint
-jiracli show rollup --sprint 12345 --group-by assignee
-
-# Completion health for a whole initiative
-jiracli show rollup INIT-123 --list   # one row per child epic
+jiracli effort sprint 12345 --group-by assignee
 
 # Status breakdown for an initiative's direct children
-jiracli show rollup INIT-123 --group-by status
+jiracli effort INIT-123 --group-by status
 ```
-Combine with a separate `search --jql '... AND statusCategory = Done' --keys-only` count to get completion percentage — rollup gives you time, search gives you issue counts by status.
+Combine with a separate `search --jql '... AND statusCategory = Done' --keys-only` count to get completion percentage — effort gives you time, search gives you issue counts by status.
 
 ### Aggregating search results
 
@@ -159,7 +161,7 @@ jiracli search --jql 'project = PROJ AND sprint in openSprints() AND issuetype =
 jiracli search --jql 'project = PROJ AND sprint in openSprints()' --count-by assignee
 ```
 
-Supported fields: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. `--count-by` paginates internally — no `--limit` needed. For time totals (Planned/Spent/Remaining) instead of pure counts, use `show rollup --group-by status` instead.
+Supported fields: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. `--count-by` paginates internally — no `--limit` needed. For time totals (Planned/Spent/Remaining) instead of pure counts, use `effort --group-by status` instead.
 
 ### Lookup metadata
 Jira metadata (components, versions, priorities, link types, users) is project-specific — never guess. Run `lookup` before any write that names one of them.
@@ -207,6 +209,6 @@ Run `jiracli add --help` and `jiracli delete --help` for more.
 
 **When in doubt, run `--help`.** `jiracli --help`, `jiracli <command> --help`, and `jiracli <command> <subcommand> --help` are always up to date and cover every flag. The skill covers the most common cases; help covers everything.
 
-**Use `show hierarchy` to find where a ticket sits in the hierarchy.** `--parent` only walks one level. When asked which epic, initiative, portfolio item, or any higher-level parent a ticket belongs to — or when mapping a set of tickets up the hierarchy — use `jiracli show hierarchy PROJ-123`. It returns the full chain (e.g. Story → Epic → Initiative/Portfolio) in a single call. Do not chain `--parent` calls.
+**Use `hierarchy` to find where a ticket sits in the hierarchy.** `--parent` only walks one level. When asked which epic, initiative, portfolio item, or any higher-level parent a ticket belongs to — or when mapping a set of tickets up the hierarchy — use `jiracli hierarchy PROJ-123`. It returns the full chain (e.g. Story → Epic → Initiative/Portfolio) in a single call. Do not chain `--parent` calls.
 
-**`rollup --group-by` vs `search --count-by`:** use `rollup --group-by status` when you need time estimates (Planned/Remaining/Spent) broken down by status — it walks a hierarchy key or a JQL set. Use `search --count-by` when you only need counts and percentages and don't need time data. Both accept `--jql`; rollup additionally accepts a hierarchy `<KEY>` and `--depth 2` for two-level breakdowns.
+**`effort --group-by` vs `search --count-by`:** use `effort ... --group-by status` when you need time estimates (Planned/Remaining/Spent) broken down by status — via a hierarchy `effort <KEY>` or a result set `effort jql '<query>'`. Use `search --count-by` when you only need counts and percentages and don't need time data. `effort jql` and `search --jql` both take a query; `effort <KEY>` additionally accepts `--depth 2` for two-level breakdowns.

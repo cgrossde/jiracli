@@ -311,6 +311,107 @@ func TestSearch_FieldsAndFieldsOnlyMutex(t *testing.T) {
 	}
 }
 
+// ── Test 6: buildEffectiveJQL — flag combination + --state all regression ────
+
+func TestBuildEffectiveJQL(t *testing.T) {
+	tests := []struct {
+		desc  string
+		jql   string
+		flags SearchFlags
+		want  string
+	}{
+		{
+			desc: "no flags — query passed through",
+			jql:  "project = CAR",
+			want: "project = CAR",
+		},
+		{
+			desc:  "--state in-progress wraps and appends clause",
+			jql:   "project = CAR",
+			flags: SearchFlags{State: "in-progress"},
+			want:  `(project = CAR) AND statusCategory = "In Progress"`,
+		},
+		{
+			desc:  "--state done",
+			jql:   "project = CAR",
+			flags: SearchFlags{State: "done"},
+			want:  `(project = CAR) AND statusCategory = "Done"`,
+		},
+		{
+			// Regression: --state all must NOT append a dangling "AND".
+			desc:  "--state all with query — query used as-is (no dangling AND)",
+			jql:   "project = CAR",
+			flags: SearchFlags{State: "all"},
+			want:  "project = CAR",
+		},
+		{
+			desc:  "--state todo with empty query — status clause + ORDER BY",
+			jql:   "",
+			flags: SearchFlags{State: "todo"},
+			want:  `statusCategory = "To Do" ORDER BY updated DESC`,
+		},
+		{
+			desc:  "--exclude-done applies default open filter",
+			jql:   "project = CAR",
+			flags: SearchFlags{ExcludeDone: true},
+			want:  jira.DefaultOpenFilter("project = CAR"),
+		},
+		{
+			desc:  "--state takes precedence over --exclude-done",
+			jql:   "project = CAR",
+			flags: SearchFlags{State: "done", ExcludeDone: true},
+			want:  `(project = CAR) AND statusCategory = "Done"`,
+		},
+		{
+			desc:  "--assigned with query prepends currentUser",
+			jql:   "project = CAR",
+			flags: SearchFlags{Assigned: true},
+			want:  `assignee = currentUser() AND (project = CAR)`,
+		},
+		{
+			desc:  "--assigned + --state in-progress appends clause",
+			jql:   "project = CAR",
+			flags: SearchFlags{Assigned: true, State: "in-progress"},
+			want:  `assignee = currentUser() AND (project = CAR) AND statusCategory = "In Progress"`,
+		},
+		{
+			// Regression: --assigned + --state all + query must not append dangling AND.
+			desc:  "--assigned + --state all + query — no dangling AND",
+			jql:   "project = CAR",
+			flags: SearchFlags{Assigned: true, State: "all"},
+			want:  `assignee = currentUser() AND (project = CAR)`,
+		},
+		{
+			desc:  "--assigned + --state all, no query — all assigned incl. Done",
+			jql:   "",
+			flags: SearchFlags{Assigned: true, State: "all"},
+			want:  `assignee = currentUser() ORDER BY updated DESC`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got, err := buildEffectiveJQL(tt.jql, tt.flags)
+			if err != nil {
+				t.Fatalf("buildEffectiveJQL(%q, %+v) unexpected error: %v", tt.jql, tt.flags, err)
+			}
+			if got != tt.want {
+				t.Errorf("buildEffectiveJQL(%q, %+v)\n  got:  %q\n  want: %q", tt.jql, tt.flags, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildEffectiveJQL_InvalidState(t *testing.T) {
+	_, err := buildEffectiveJQL("project = CAR", SearchFlags{State: "bogus"})
+	if err == nil {
+		t.Fatal("expected error for invalid --state, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown --state") {
+		t.Errorf("expected 'unknown --state' in error, got: %v", err)
+	}
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func sliceEqual(a, b []string) bool {

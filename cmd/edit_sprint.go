@@ -222,7 +222,6 @@ func buildSprintPreview(entry keychain.Entry, keys []string, useBacklog bool, sp
 		}
 	}
 
-	sb.WriteString("\nTo apply:\n  re-run with --yes\n")
 	return sb.String()
 }
 

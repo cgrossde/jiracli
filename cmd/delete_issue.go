@@ -90,7 +90,6 @@ func DeleteIssue(ctx context.Context, flags DeleteIssueFlags, key string) (strin
 	for _, v := range validation {
 		fmt.Fprintf(&sb, "  %s %s\n", v.Status, v.Message)
 	}
-	sb.WriteString("\nTo apply:\n  re-run with --yes\n")
 	preview := sb.String()
 
 	// Step 2: --yes path.

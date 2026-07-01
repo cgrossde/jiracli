@@ -21,19 +21,19 @@ type HierarchyNode struct {
 
 // HierarchyChain is the full Initiative → … → Subject → Children chain.
 type HierarchyChain struct {
-	Ancestors              []HierarchyNode `json:"ancestors"`
-	Subject                HierarchyNode   `json:"subject"`
+	Ancestors []HierarchyNode `json:"ancestors"`
+	Subject   HierarchyNode   `json:"subject"`
 	// Siblings is the set of co-children of Subject under the nearest ancestor.
 	// The Subject itself appears in the slice with IsSubject=true.
 	// Nil when there are no ancestors (root issue).
-	Siblings               []HierarchyNode `json:"siblings,omitempty"`
-	SiblingsTotal          int             `json:"siblingsTotal,omitempty"`
-	SiblingsTruncated      bool            `json:"siblingsTruncated,omitempty"`
-	Children               []HierarchyNode `json:"children"`
-	ChildrenTotal          int             `json:"childrenTotal"`
-	ChildrenTruncated      bool            `json:"childrenTruncated,omitempty"`
-	DescendantsTruncated   bool            `json:"descendantsTruncated,omitempty"`
-	ChildrenError          string          `json:"childrenError,omitempty"`
+	Siblings             []HierarchyNode `json:"siblings,omitempty"`
+	SiblingsTotal        int             `json:"siblingsTotal,omitempty"`
+	SiblingsTruncated    bool            `json:"siblingsTruncated,omitempty"`
+	Children             []HierarchyNode `json:"children"`
+	ChildrenTotal        int             `json:"childrenTotal"`
+	ChildrenTruncated    bool            `json:"childrenTruncated,omitempty"`
+	DescendantsTruncated bool            `json:"descendantsTruncated,omitempty"`
+	ChildrenError        string          `json:"childrenError,omitempty"`
 }
 
 // maxAncestorDepth caps walks to defend against cyclical/long Parent Link chains.
@@ -285,12 +285,12 @@ func BuildHierarchy(
 		strategy, ok := strategyForLevel(parentPtr, hf, portfolioFieldName)
 		if ok {
 			// Include hierarchy fields so parentKeyForChild can attribute each child to its parent.
-		sibFields := []string{"summary", "status", "issuetype", "assignee"}
-		for _, fid := range hf.FieldList() {
-			if fid != "" {
-				sibFields = append(sibFields, fid)
+			sibFields := []string{"summary", "status", "issuetype", "assignee"}
+			for _, fid := range hf.FieldList() {
+				if fid != "" {
+					sibFields = append(sibFields, fid)
+				}
 			}
-		}
 			byParent, total, serr := fetchChildrenForParents(ctx, c, []string{parentNode.Key}, strategy, hf, portfolioFieldName, sibFields, fetchAll, "")
 			if serr == nil {
 				rawSibs := byParent[parentNode.Key]
@@ -704,10 +704,10 @@ func fetchChildrenForParents(
 
 // FieldProbe holds the result of a live diagnostic test for one hierarchy field.
 type FieldProbe struct {
-	Label     string // "Epic Link", "Parent Link", "Portfolio"
-	FieldID   string // configured field ID, "" if unconfigured
-	OK        bool   // true when the field is searchable and returns results
-	Note      string // human-readable status detail
+	Label   string // "Epic Link", "Parent Link", "Portfolio"
+	FieldID string // configured field ID, "" if unconfigured
+	OK      bool   // true when the field is searchable and returns results
+	Note    string // human-readable status detail
 }
 
 // ProbeHierarchy runs lightweight live diagnostics (limit-1 searches) for each

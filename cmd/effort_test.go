@@ -90,37 +90,27 @@ func TestRenderRollupTree_WithEstimates(t *testing.T) {
 	}
 }
 
-func TestRenderRollupTree_WithList(t *testing.T) {
-	raw := makeTestSubject("EPIC-1", "Epic")
-	sp := float64(3)
-	l1Nodes := []jira.RollupNode{
-		{Key: "STORY-1", Summary: "First story", Status: "Open", IssueType: "Story",
-			OriginalEstimateSecs: 7200, StoryPoints: &sp},
-		{Key: "STORY-2", Summary: "Second story", Status: "Done", IssueType: "Story"},
-	}
-	tree := makeTree("EPIC-1", l1Nodes)
-	tree.Nodes = l1Nodes // --list enabled
-
-	out := renderRollupTree(raw, tree, false, 1, false, "")
-
-	if !strings.Contains(out, "Children:") {
-		t.Errorf("expected Children: section with --list nodes, got:\n%s", out)
-	}
-	if !strings.Contains(out, "STORY-1") {
-		t.Errorf("expected STORY-1 in list, got:\n%s", out)
-	}
-	if !strings.Contains(out, "STORY-2") {
-		t.Errorf("expected STORY-2 in list, got:\n%s", out)
-	}
-}
-
-func TestShowRollup_InvalidRef(t *testing.T) {
-	_, err := ShowRollup(context.Background(), ShowRollupFlags{}, "not-a-valid-key!@#")
+func TestEffort_InvalidRef(t *testing.T) {
+	_, err := Effort(context.Background(), EffortFlags{}, "not-a-valid-key!@#")
 	if err == nil {
 		t.Fatal("expected error for invalid ref, got nil")
 	}
-	if !strings.Contains(err.Error(), "show rollup requires a plain issue key") {
+	if !strings.Contains(err.Error(), "effort requires a plain issue key") {
 		t.Errorf("expected corrective error message, got: %v", err)
+	}
+}
+
+// The effort command drops the per-child --list table; renderRollupTree must
+// point the reader at `jiracli hierarchy` for the breakdown instead.
+func TestRenderRollupTree_DrillHint(t *testing.T) {
+	raw := makeTestSubject("EPIC-1", "Epic")
+	tree := makeTree("EPIC-1", nil)
+	out := renderRollupTree(raw, tree, false, 1, false, "")
+	if !strings.Contains(out, "jiracli hierarchy EPIC-1") {
+		t.Errorf("expected hierarchy drill hint, got:\n%s", out)
+	}
+	if strings.Contains(out, "Children:") {
+		t.Errorf("effort must not render a per-child list, got:\n%s", out)
 	}
 }
 
@@ -233,32 +223,6 @@ func TestRenderRollupTree_TotalAllLevels(t *testing.T) {
 	}
 	if !strings.Contains(out, "Total (all levels)") {
 		t.Errorf("expected 'Total (all levels)' label at depth 2, got:\n%s", out)
-	}
-}
-
-// ── HasChildren indicator in --list ─────────────────────────────────────────
-
-func TestRenderRollupTree_HasChildrenIndicator(t *testing.T) {
-	raw := makeTestSubject("PROJ-1", "Initiative")
-	nodes := []jira.RollupNode{
-		{Key: "EPIC-1", Summary: "Epic with children", IssueType: "Epic", HasChildren: true},
-		{Key: "EPIC-2", Summary: "Epic without children", IssueType: "Epic", HasChildren: false},
-	}
-	l1Row := jira.AggregateNodes(nodes, "Level 1 — 2 Epics", false)
-	l1Row.TotalCount = 2
-	tree := jira.RollupTree{
-		SubjectKey:       "PROJ-1",
-		SubjectIssueType: "Initiative",
-		SubjectSummary:   "Test Initiative",
-		SubjectRow:       jira.RollupRow{Label: "Initiative PROJ-1 (own)", TotalCount: 1},
-		Rows:             []jira.RollupRow{l1Row},
-		Nodes:            nodes,
-		MaxFetchedDepth:  1,
-	}
-
-	out := renderRollupTree(raw, tree, true, 1, false, "")
-	if !strings.Contains(out, "▸") {
-		t.Errorf("expected ▸ indicator for node with children, got:\n%s", out)
 	}
 }
 
@@ -448,23 +412,43 @@ func TestRenderRollupHierarchyGrouped_TwoLevels(t *testing.T) {
 	}
 }
 
-// ── ShowRollup --group-by validation ─────────────────────────────────────────
+// ── Effort --group-by validation ─────────────────────────────────────────────
 
-func TestShowRollup_GroupByValidation(t *testing.T) {
-	// Unsupported group-by value.
-	_, err := ShowRollup(context.Background(), ShowRollupFlags{
-		JQL:     "project = X",
-		GroupBy: "foo",
-	}, "")
-	if err == nil || !strings.Contains(err.Error(), "--group-by: supported values") {
-		t.Errorf("expected group-by validation error, got: %v", err)
+func TestEffort_GroupByValidation(t *testing.T) {
+	// Hierarchy mode: assignee is only valid in the jql/sprint subcommands.
+	_, err := Effort(context.Background(), EffortFlags{GroupBy: "assignee"}, "PROJ-1")
+	if err == nil || !strings.Contains(err.Error(), "only available in") {
+		t.Errorf("expected assignee-in-hierarchy error, got: %v", err)
 	}
 
-	// assignee requires --jql or --sprint, not <KEY>.
-	_, err = ShowRollup(context.Background(), ShowRollupFlags{
-		GroupBy: "assignee",
-	}, "PROJ-1")
-	if err == nil || !strings.Contains(err.Error(), "--group-by=assignee requires --jql or --sprint") {
-		t.Errorf("expected assignee+key validation error, got: %v", err)
+	// Hierarchy mode: unsupported group-by value.
+	_, err = Effort(context.Background(), EffortFlags{GroupBy: "foo"}, "PROJ-1")
+	if err == nil || !strings.Contains(err.Error(), "supported values in hierarchy mode") {
+		t.Errorf("expected hierarchy group-by error, got: %v", err)
+	}
+}
+
+func TestEffortQuery_GroupByValidation(t *testing.T) {
+	// Query mode accepts assignee, so exercise the validation with an
+	// unsupported value instead.
+	_, err := EffortQuery(context.Background(), EffortFlags{JQL: "project = X", GroupBy: "foo"})
+	if err == nil || !strings.Contains(err.Error(), "--group-by: supported values are 'assignee'") {
+		t.Errorf("expected query group-by validation error, got: %v", err)
+	}
+}
+
+// ── --state validation shared by hierarchy + effort ──────────────────────────
+
+func TestEffort_InvalidState(t *testing.T) {
+	_, err := Effort(context.Background(), EffortFlags{State: "bogus"}, "PROJ-1")
+	if err == nil || !strings.Contains(err.Error(), "unknown --state") {
+		t.Errorf("expected --state validation error, got: %v", err)
+	}
+}
+
+func TestEffortQuery_InvalidState(t *testing.T) {
+	_, err := EffortQuery(context.Background(), EffortFlags{JQL: "project = X", State: "bogus"})
+	if err == nil || !strings.Contains(err.Error(), "unknown --state") {
+		t.Errorf("expected --state validation error, got: %v", err)
 	}
 }

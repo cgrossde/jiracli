@@ -113,7 +113,7 @@ Omit --key to delete all entries.
 
 See also:
   jiracli cache list    show cached keys and their TTLs`,
-		Args:  cobra.NoArgs,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := cacheClear(flags)
 			if err != nil {

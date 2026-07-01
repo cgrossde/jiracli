@@ -49,7 +49,7 @@ func (c *Client) Search(ctx context.Context, jql string, page, limit int, fields
 		return SearchResponse{}, err
 	}
 	if status != 200 {
-		return SearchResponse{}, fmt.Errorf("search: %w", MapStatus("", status, respBody))
+		return SearchResponse{}, MapStatus("", status, respBody)
 	}
 	var resp SearchResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {

@@ -15,7 +15,6 @@ type AttachmentDownloadFlags struct {
 	FilePath string // -f: save to this path
 }
 
-
 // attachmentToStdout streams the attachment body directly to w (the real stdout,
 // bypassing the presenter's in-memory buffer).
 // Returns ErrAlreadyPresented so the presenter skips footer/error output.

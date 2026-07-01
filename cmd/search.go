@@ -23,13 +23,21 @@ type SearchFlags struct {
 	Limit       int
 	Page        int
 	ExcludeDone bool
+	Open        bool
 	Fields      string
 	FieldsOnly  string
 	Assigned    bool
-	Category    string
+	State       string
 	JQL         string // --jql: entire query as one string, bypasses arg joining
 	Time        bool   // --time: shorthand for adding timeoriginalestimate, timeestimate, timespent columns
 	CountBy     string // --count-by: aggregate matching issues by this field; replaces issue list with a count table
+
+	// Pagination-hint overrides. When PageCmdBase is set (e.g. by "show
+	// assigned"), the next-page footer uses that base command and omits the
+	// synthesised JQL, echoing --state from PageCmdState instead. These fields
+	// never affect the JQL that is actually sent to Jira.
+	PageCmdBase  string
+	PageCmdState string
 }
 
 // defaultSearchFields is the default field set requested from the Jira API.
@@ -56,12 +64,13 @@ the join entirely:
 
   jiracli search --jql 'text ~ "KSP" AND project = CAR'
 
-All issues are returned by default, including Done. Use --exclude-done to hide
-issues in the "Done" status category (equivalent to adding
-statusCategory != "Done" to your query).
+Bare JQL and --jql queries return all issues by default, including Done. Use
+--exclude-done (alias: --open) to hide the "Done" status category, or --state to
+filter by category (todo, in-progress, done, all).
 
-Use --category to filter by status category (todo, in-progress, done, all).
-Use --assigned to restrict results to the current user.
+--assigned restricts results to the current user and, unless you also pass
+--state, defaults to non-Done issues (i.e. it implies statusCategory != "Done").
+Pass --state all together with --assigned to include Done.
 
 Fields reference (--fields / --fields-only):
   Default columns: key, status, issuetype, priority, assignee, updated, summary
@@ -72,6 +81,12 @@ Fields reference (--fields / --fields-only):
   Use jiracli lookup fields to list all available field IDs.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// --open is an alias for --exclude-done (shared vocabulary with
+			// hierarchy/effort); normalise early so every downstream path,
+			// including the next-page footer, sees a single flag.
+			if flags.Open {
+				flags.ExcludeDone = true
+			}
 			if flags.JQL != "" && len(args) > 0 {
 				return fmt.Errorf("--jql and positional JQL arguments are mutually exclusive")
 			}
@@ -106,12 +121,13 @@ Fields reference (--fields / --fields-only):
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Maximum results per page (1-100)")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().BoolVar(&flags.ExcludeDone, "exclude-done", false, "Exclude issues in the Done status category")
+	c.Flags().BoolVar(&flags.Open, "open", false, "Exclude Done issues (alias for --exclude-done)")
 	c.Flags().StringVar(&flags.Fields, "fields", "", "Add/drop display columns: \"name\" or \"+name\" to add, \"-name\" to drop. "+
 		"Standard names: description, reporter, labels, components, fixVersions, resolution, duedate, timeestimate, timespent. "+
 		"Any Jira field ID is also accepted. See --help for the full reference.")
 	c.Flags().StringVar(&flags.FieldsOnly, "fields-only", "", `Restrict fetched fields to exactly this comma-separated list (replaces defaults; mutually exclusive with --fields)`)
-	c.Flags().BoolVar(&flags.Assigned, "assigned", false, "Show only issues assigned to me")
-	c.Flags().StringVar(&flags.Category, "category", "", "Status category filter: todo, in-progress, done, all")
+	c.Flags().BoolVar(&flags.Assigned, "assigned", false, "Show only issues assigned to me (excludes Done unless --state is set; use --state all to include Done)")
+	c.Flags().StringVar(&flags.State, "state", "", "Status category filter: todo, in-progress, done, all")
 	c.Flags().StringVar(&flags.JQL, "jql", "", "Entire JQL query as one string — bypasses positional-arg joining; safe for queries with quoted literals like text ~ \"KSP\"")
 	c.Flags().BoolVar(&flags.KeysOnly, "keys-only", false, "Print one issue key per line; ideal for piping into further commands (e.g. xargs jiracli show)")
 	c.Flags().BoolVar(&flags.Time, "time", false, "Show time-tracking columns: Estimate, Remaining, Spent (shorthand for --fields +timeoriginalestimate,+timeestimate,+timespent; ignored when --fields-only is used)")
@@ -122,6 +138,53 @@ Fields reference (--fields / --fields-only):
 	return c
 }
 
+// buildEffectiveJQL combines the user-supplied JQL with the --assigned,
+// --state, and --exclude-done flags into the query actually sent to Jira.
+//
+// Precedence mirrors the flag semantics shared with hierarchy/effort:
+//   - --state takes priority over --exclude-done.
+//   - --state all yields an empty status clause, so the query is used as-is
+//     (no dangling "AND"); this is the bug-fixed path.
+func buildEffectiveJQL(jql string, flags SearchFlags) (string, error) {
+	if flags.Assigned {
+		// --assigned overrides any JQL args when none provided; otherwise prepends.
+		if jql == "" {
+			return buildAssignedJQL(flags.State)
+		}
+		catClause, err := stateJQLClause(flags.State)
+		if err != nil {
+			return "", err
+		}
+		effective := `assignee = currentUser() AND (` + jql + `)`
+		if catClause != "" {
+			effective += ` AND ` + catClause
+		}
+		return effective, nil
+	}
+
+	if flags.State != "" {
+		catClause, err := stateJQLClause(flags.State)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case catClause == "":
+			// --state all: no status filter, use the query as-is (includes Done).
+			return jql, nil
+		case jql == "":
+			return catClause + ` ORDER BY updated DESC`, nil
+		default:
+			return `(` + jql + `) AND ` + catClause, nil
+		}
+	}
+
+	if flags.ExcludeDone {
+		return jira.DefaultOpenFilter(jql), nil
+	}
+
+	return jql, nil
+}
+
 // Search is the Layer 1 implementation for the search command.
 func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) {
 	entry, err := resolveEntry(flags.Profile)
@@ -130,38 +193,9 @@ func Search(ctx context.Context, flags SearchFlags, jql string) (string, error) 
 	}
 	client := jira.New(entry)
 
-	// Build effective JQL.
-	effectiveJQL := jql
-	if flags.Assigned {
-		// --assigned overrides any JQL args when none provided; otherwise prepends.
-		if jql == "" {
-			var err error
-			effectiveJQL, err = buildAssignedJQL(flags.Category)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			catClause, err := categoryJQLClause(flags.Category)
-			if err != nil {
-				return "", err
-			}
-			effectiveJQL = `assignee = currentUser() AND (` + jql + `)`
-			if catClause != "" {
-				effectiveJQL += ` AND ` + catClause
-			}
-		}
-	} else if flags.Category != "" {
-		catClause, err := categoryJQLClause(flags.Category)
-		if err != nil {
-			return "", err
-		}
-		if jql == "" {
-			effectiveJQL = catClause + ` ORDER BY updated DESC`
-		} else {
-			effectiveJQL = `(` + jql + `) AND ` + catClause
-		}
-	} else if flags.ExcludeDone {
-		effectiveJQL = jira.DefaultOpenFilter(jql)
+	effectiveJQL, err := buildEffectiveJQL(jql, flags)
+	if err != nil {
+		return "", err
 	}
 
 	// --count-by: paginate to exhaustion and return a histogram table.
@@ -759,17 +793,37 @@ func descPreview(s string) string {
 
 // buildNextPageCmd reconstructs the jiracli search command for the next page.
 func buildNextPageCmd(jql string, nextPage, limit int, flags SearchFlags) string {
+	// Assigned mode (and any other command that pre-builds its own JQL): the
+	// footer must point back at the invoking command, not at "jiracli search"
+	// with a synthesised query the user never typed.
+	if flags.PageCmdBase != "" {
+		var parts []string
+		parts = append(parts, flags.PageCmdBase)
+		parts = append(parts, fmt.Sprintf("--page %d", nextPage))
+		parts = append(parts, fmt.Sprintf("--limit %d", limit))
+		if flags.PageCmdState != "" {
+			parts = append(parts, fmt.Sprintf("--state %s", flags.PageCmdState))
+		}
+		if flags.Profile != "" {
+			parts = append(parts, fmt.Sprintf("--profile %s", flags.Profile))
+		}
+		if flags.KeysOnly {
+			parts = append(parts, "--keys-only")
+		}
+		return strings.Join(parts, " ")
+	}
+
 	var parts []string
 	parts = append(parts, "jiracli search")
 	parts = append(parts, fmt.Sprintf("--page %d", nextPage))
 	parts = append(parts, fmt.Sprintf("--limit %d", limit))
-	// --exclude-done is superseded by --category; omit it from the footer when
-	// a category filter is active to avoid confusing/redundant next-page commands.
-	if flags.ExcludeDone && flags.Category == "" {
+	// --exclude-done is superseded by --state; omit it from the footer when
+	// a state filter is active to avoid confusing/redundant next-page commands.
+	if flags.ExcludeDone && flags.State == "" {
 		parts = append(parts, "--exclude-done")
 	}
-	if flags.Category != "" {
-		parts = append(parts, fmt.Sprintf("--category %s", flags.Category))
+	if flags.State != "" {
+		parts = append(parts, fmt.Sprintf("--state %s", flags.State))
 	}
 	if flags.Assigned {
 		parts = append(parts, "--assigned")

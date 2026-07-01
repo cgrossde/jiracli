@@ -61,9 +61,11 @@ Common flags (on the default issue view):
   --no-history            Omit activity/changelog section
   --no-comments           Omit comments section
   --no-children           Skip the children list (saves one API call)
-  --comments N            Inline last N comments (default 1, max 25)
   --parent                Show this issue's parent instead
                           (Parent Link → Parent → Epic Link, in that order)
+
+The issue view inlines the single latest comment; run 'jiracli show comments
+<KEY>' for the full, paginated thread.
 
 Activity shows the newest 10 entries. Long-text fields (description) are
 always suppressed; comment/summary/environment are truncated to 120 chars.
@@ -110,9 +112,6 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 				}
 				switch ref.Kind {
 				case jira.RefIssue:
-					if issueFlags.CommentsN > 25 {
-						return fmt.Errorf("--comments max is 25 — use jiracli show comments %s --limit %d for a longer thread", rawRef, issueFlags.CommentsN)
-					}
 					result, err := Issue(cmd.Context(), issueFlags, rawRef)
 					if err != nil {
 						if multi {
@@ -157,7 +156,6 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 	root.Flags().BoolVar(&issueFlags.JSON, "json", false, "Output NDJSON")
 	root.Flags().BoolVar(&issueFlags.NoHistory, "no-history", false, "Skip activity/changelog section")
 	root.Flags().BoolVar(&issueFlags.NoComments, "no-comments", false, "Skip comments section")
-	root.Flags().IntVar(&issueFlags.CommentsN, "comments", 1, "Number of latest comments to preview (max 25)")
 	root.Flags().StringVar(&issueFlags.Fields, "fields", "", "Add/drop fields: \"name\" or \"+name\" to add, \"-name\" to drop. "+
 		"Standard names: reporter, description, labels, components, fixVersions, resolution, duedate, timeestimate, timespent. "+
 		"Any Jira field ID accepted. Run jiracli show --help for full reference.")
@@ -181,8 +179,6 @@ Use 'jiracli show history <KEY> --since 7d' for the full paginated changelog.`,
 		NewTransitionsCmd(),
 		NewAttachmentsCmd(),
 		NewAssignedCmd(),
-		NewShowHierarchyCmd(),
-		NewShowRollupCmd(),
 	)
 	return root
 }

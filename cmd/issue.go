@@ -21,7 +21,6 @@ type IssueFlags struct {
 	JSON       bool
 	NoHistory  bool
 	NoComments bool
-	CommentsN  int
 	Fields     string
 	FieldsOnly string
 	NoChildren bool
@@ -50,9 +49,6 @@ Fields reference (--fields / --fields-only):
   Use jiracli lookup fields to list all available field IDs.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if flags.CommentsN > 25 {
-				return fmt.Errorf("--comments max is 25 — use jiracli show comments %s --limit %d for a longer thread", args[0], flags.CommentsN)
-			}
 			result, err := Issue(cmd.Context(), flags, args[0])
 			if err != nil {
 				return err
@@ -65,7 +61,6 @@ Fields reference (--fields / --fields-only):
 	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON")
 	c.Flags().BoolVar(&flags.NoHistory, "no-history", false, "Skip activity/changelog section")
 	c.Flags().BoolVar(&flags.NoComments, "no-comments", false, "Skip comments section")
-	c.Flags().IntVar(&flags.CommentsN, "comments", 1, "Number of latest comments to preview (max 25)")
 	c.Flags().StringVar(&flags.Fields, "fields", "", "Add/drop fields: \"name\" or \"+name\" to add, \"-name\" to drop. "+
 		"Standard names: reporter, description, labels, components, fixVersions, resolution, duedate, timeestimate, timespent. "+
 		"Any Jira field ID accepted. See --help for full reference.")
@@ -77,11 +72,6 @@ Fields reference (--fields / --fields-only):
 
 // Issue is the Layer 1 implementation for the issue command.
 func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
-	// Validate --comments bound before any I/O
-	if flags.CommentsN > 25 {
-		return "", fmt.Errorf("--comments max is 25 — use jiracli show comments %s --limit %d for a longer thread", ref, flags.CommentsN)
-	}
-
 	// Parse the reference — accepts KEY or browse URL
 	parsed, err := jira.ParseRef(ref)
 	if err != nil {
@@ -149,7 +139,9 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		return "", err
 	}
 
-	commentsN := flags.CommentsN
+	// Default issue view inlines a single latest-comment preview; use
+	// 'jiracli show comments <KEY>' for the full, paginated thread.
+	commentsN := 1
 	if flags.NoComments {
 		commentsN = 0
 	}
@@ -556,7 +548,6 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 
-
 	// Description
 	if rec.Description != "" {
 		sb.WriteString(sectionLabel("Description:") + "\n")
@@ -723,9 +714,11 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	fmt.Fprintf(&sb, "  → jiracli show comments     %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show history      %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show transitions  %s\n", rec.Key)
-	fmt.Fprintf(&sb, "  → jiracli show hierarchy    %s\n", rec.Key)
-	if strings.EqualFold(rec.IssueType, "Epic") {
-		fmt.Fprintf(&sb, "  → jiracli show rollup       %s\n", rec.Key)
+	fmt.Fprintf(&sb, "  → jiracli hierarchy         %s\n", rec.Key)
+	// Advertise `effort` only for issue types that roll up children (Epics and
+	// portfolio-level items); it is meaningless for plain Stories/Bugs/Sub-tasks.
+	if jira.IssueTypeRollsUp(rec.IssueType) {
+		fmt.Fprintf(&sb, "  → jiracli effort            %s   # roll up time & story points across its children\n", rec.Key)
 	}
 
 	return sb.String()

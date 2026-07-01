@@ -116,11 +116,12 @@ func (c *Client) do(req *http.Request) ([]byte, int, error) {
 // sent by Jira Data Center on a 429 response.
 //
 // Jira DC headers (all optional — not every instance has rate limiting on):
-//   retry-after              – seconds until a new token is available (> 0 means wait)
-//   X-RateLimit-Limit        – max tokens in the bucket
-//   X-RateLimit-Remaining    – tokens remaining at request time
-//   X-RateLimit-FillRate     – tokens added per interval
-//   X-RateLimit-Interval-Seconds – interval length in seconds
+//
+//	retry-after              – seconds until a new token is available (> 0 means wait)
+//	X-RateLimit-Limit        – max tokens in the bucket
+//	X-RateLimit-Remaining    – tokens remaining at request time
+//	X-RateLimit-FillRate     – tokens added per interval
+//	X-RateLimit-Interval-Seconds – interval length in seconds
 func rateLimitError(h http.Header) error {
 	retryAfter := h.Get("retry-after")
 	remaining := h.Get("X-RateLimit-Remaining")

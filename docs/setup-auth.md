@@ -258,7 +258,7 @@ Prints the authenticated user and credential status for the active profile. This
 
 ## `config hierarchy`
 
-View or update the hierarchy field IDs stored for a credential profile. These IDs are used by `show <KEY>` (to populate `epic` and `portfolio`) and `show hierarchy <KEY>` (to walk the ancestor chain).
+View or update the hierarchy field IDs stored for a credential profile. These IDs are used by `show <KEY>` (to populate `epic` and `portfolio`) and `hierarchy <KEY>` (to walk the ancestor chain).
 
     jiracli config hierarchy [flags]
 

@@ -9,8 +9,8 @@ type RollupRow struct {
 	RemainingEstimateSecs int64          `json:"remainingEstimateSeconds"`
 	TimeSpentSecs         int64          `json:"timeSpentSeconds"`
 	StoryPoints           float64        `json:"storyPoints"`
-	PointedCount          int            `json:"pointedCount"`   // items with SP set
-	TotalCount            int            `json:"totalCount"`     // items in this level
+	PointedCount          int            `json:"pointedCount"` // items with SP set
+	TotalCount            int            `json:"totalCount"`   // items in this level
 	Truncated             bool           `json:"truncated,omitempty"`
 	IssueTypeCounts       map[string]int `json:"issueTypeCounts,omitempty"` // e.g. {"Epic":3,"Bug":2}
 }
@@ -33,15 +33,15 @@ type RollupNode struct {
 
 // RollupTree is the complete result of a ShowRollup call.
 type RollupTree struct {
-	SubjectKey      string       `json:"subjectKey"`
-	SubjectIssueType string      `json:"subjectIssueType"`
-	SubjectSummary  string       `json:"subjectSummary"`
-	SubjectRow      RollupRow    `json:"subject"`      // subject's own TT/SP
-	Rows            []RollupRow  `json:"rows"`         // L1 aggregate, optionally L2 aggregate
-	Nodes           []RollupNode `json:"nodes"`        // L1 children for --list; empty unless requested
-	HasDeeperLevel  bool         `json:"hasDeeperLevel"` // any L1 child has children
-	MaxFetchedDepth int          `json:"maxFetchedDepth"`
-	GroupBy         string       `json:"groupBy,omitempty"` // "", "assignee", "status", "statusCategory"
+	SubjectKey       string       `json:"subjectKey"`
+	SubjectIssueType string       `json:"subjectIssueType"`
+	SubjectSummary   string       `json:"subjectSummary"`
+	SubjectRow       RollupRow    `json:"subject"`        // subject's own TT/SP
+	Rows             []RollupRow  `json:"rows"`           // L1 aggregate, optionally L2 aggregate
+	Nodes            []RollupNode `json:"nodes"`          // L1 children for --list; empty unless requested
+	HasDeeperLevel   bool         `json:"hasDeeperLevel"` // any L1 child has children
+	MaxFetchedDepth  int          `json:"maxFetchedDepth"`
+	GroupBy          string       `json:"groupBy,omitempty"` // "", "assignee", "status", "statusCategory"
 }
 
 // ChildJQL returns the JQL to fetch direct children of key given the subject's issue type and
@@ -107,6 +107,15 @@ func IssueTypeHasEpicLinkChildren(issueType string) bool {
 	return issueTypeLower(issueType) == "epic"
 }
 
+// IssueTypeRollsUp reports whether an issue of this type aggregates
+// roll-up-able children worth advertising `effort` for: Epics roll up their
+// stories, portfolio-level types (Initiative, Feature, Program, Theme) roll up
+// their epics. Plain Stories/Bugs/Sub-tasks do not.
+func IssueTypeRollsUp(issueType string) bool {
+	lower := issueTypeLower(issueType)
+	return lower == "epic" || isPortfolioLevel(lower)
+}
+
 // AggregateNodes sums TT and SP from a slice of RollupNode into a RollupRow.
 func AggregateNodes(nodes []RollupNode, label string, truncated bool) RollupRow {
 	row := RollupRow{
@@ -136,11 +145,11 @@ func AggregateNodes(nodes []RollupNode, label string, truncated bool) RollupRow 
 // RollupNodeFromRaw builds a RollupNode from a raw issue.
 func RollupNodeFromRaw(raw IssueRaw, spField string) RollupNode {
 	n := RollupNode{
-		Key:       raw.Key,
-		Summary:   raw.Fields.Summary,
-		Status:    raw.Fields.Status.Name,
+		Key:            raw.Key,
+		Summary:        raw.Fields.Summary,
+		Status:         raw.Fields.Status.Name,
 		StatusCategory: raw.Fields.Status.StatusCategory.Name,
-		IssueType: raw.Fields.IssueType.Name,
+		IssueType:      raw.Fields.IssueType.Name,
 	}
 	if raw.Fields.Assignee != nil {
 		n.Assignee = raw.Fields.Assignee.DisplayName

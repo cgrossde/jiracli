@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -13,27 +14,39 @@ import (
 	"github.com/cgrossde/jiracli/internal/jira"
 )
 
-// ShowRollupFlags holds parsed flag values for show rollup.
-type ShowRollupFlags struct {
-	Profile string
-	JSON    bool
-	All     bool   // --all: fetch all children, overrides Limit
-	Limit   int    // --limit N: max children per level (default 100); ignored when All is true
-	Depth   int    // 1 = subject + L1; 2 = subject + L1 + L2
-	List    bool   // also print per-child table
-	JQL     string // --jql: aggregate over arbitrary JQL result set instead of a hierarchy subject
-	Sprint  int    // --sprint <id>: aggregate over issues in a sprint (translated to JQL "sprint = <id>")
-	GroupBy string // --group-by: currently only "assignee"; empty = no grouping (existing behavior)
+// EffortFlags holds parsed flag values for the effort command.
+type EffortFlags struct {
+	Profile     string
+	JSON        bool
+	All         bool   // --all: fetch all children, overrides Limit
+	Limit       int    // --limit N: max children per level (default 100); ignored when All is true
+	Depth       int    // 1 = subject + L1; 2 = subject + L1 + L2
+	JQL         string // --jql: aggregate over arbitrary JQL result set instead of a hierarchy subject
+	Sprint      int    // --sprint <id>: aggregate over issues in a sprint (translated to JQL "sprint = <id>")
+	GroupBy     string // --group-by: "assignee" (JQL/sprint only), "status", "statusCategory"; empty = no grouping
+	Open        bool   // --open: alias for --exclude-done
+	ExcludeDone bool   // --exclude-done: skip Done-category children
+	State       string // --state: keep only this status category (todo|in-progress|done|all)
+	Since       string // --since: only include children updated on/after this date
 }
 
-// NewShowRollupCmd builds the "show rollup" subcommand.
-func NewShowRollupCmd() *cobra.Command {
-	var flags ShowRollupFlags
+// NewEffortCmd builds the "effort" command tree:
+//
+//	effort <KEY>        hierarchy rollup (default; walks the issue's children)
+//	effort jql <query>  aggregate over an arbitrary JQL result set
+//	effort sprint <id>  aggregate over a sprint's issues
+//
+// The <KEY> and query modes are genuinely different operations (structural
+// roll-up vs. flat set aggregation), so they live on separate subcommands
+// rather than mutually-exclusive flags.
+func NewEffortCmd() *cobra.Command {
+	var flags EffortFlags
 	c := &cobra.Command{
-		Use:   "rollup [<KEY>]",
-		Short: "Aggregate time + story-point estimates from an issue's children",
-		Long: `Walks the direct children of any issue and aggregates originalEstimate,
-remainingEstimate, timeSpent, and Story Points.
+		Use:   "effort <KEY>",
+		Short: "Aggregate time + story-point estimates across an issue's children",
+		Long: `Walks the children of any issue and aggregates originalEstimate,
+remainingEstimate, timeSpent, and Story Points — then shows how much of the
+planned time has been spent.
 
 Works on any issue type:
   Epic       — children are its Stories/Tasks via "Epic Link"
@@ -41,64 +54,26 @@ Works on any issue type:
   Other      — children are subtasks via the typed parent relationship
 
 By default only the immediate children (depth 1) are fetched.  Use --depth 2
-to also aggregate the grandchildren of each L1 child.  If the hierarchy goes
-deeper, a hint is shown.
+to also aggregate the grandchildren of each L1 child.
 
-Use --list to print a per-child breakdown table beneath the summary.
+Filter which children are counted (shared with 'jiracli hierarchy' and 'jiracli search'):
+  --exclude-done            skip issues in the Done status category
+  --open                    alias for --exclude-done
+  --state todo|in-progress|done|all   count only that status category (all = no filter)
+  --since <date>            only count issues updated on or after this date
 
-Use --jql or --sprint to aggregate over an arbitrary set of issues instead of
-a hierarchy.
+Add --group-by status|statusCategory to replace the per-level breakdown with a
+per-status breakdown of the direct children.
 
-Add --group-by to break down the totals:
-  assignee        — group by person (requires --jql or --sprint)
-  status          — group by status name (e.g. "In Progress", "Pending Review")
-  statusCategory  — group by status category (To Do, In Progress, Done)
+To aggregate over an arbitrary set of issues instead of a hierarchy, use the
+subcommands:
+  jiracli effort jql '<query>'    aggregate over a JQL result set
+  jiracli effort sprint <id>      aggregate over a sprint
 
-In hierarchy mode, --group-by status / statusCategory replaces the per-level
-breakdown with a per-status breakdown of the direct children.`,
-		Args: cobra.MaximumNArgs(1),
+To see the individual children, use 'jiracli hierarchy <KEY>'.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			hasKey := len(args) == 1
-			hasJQL := flags.JQL != ""
-			hasSprint := flags.Sprint != 0
-
-			// Mutual exclusion.
-			n := 0
-			if hasKey {
-				n++
-			}
-			if hasJQL {
-				n++
-			}
-			if hasSprint {
-				n++
-			}
-			if n > 1 {
-				return fmt.Errorf("show rollup: <KEY>, --jql, and --sprint are mutually exclusive — choose one")
-			}
-			if n == 0 {
-				return fmt.Errorf("show rollup requires <KEY>, --jql, or --sprint — run: jiracli show rollup --help")
-			}
-
-			// --group-by validation.
-			if flags.GroupBy != "" {
-				switch flags.GroupBy {
-				case "assignee", "status", "statusCategory":
-					// ok
-				default:
-					return fmt.Errorf("--group-by: supported values are 'assignee', 'status', 'statusCategory' — got %q", flags.GroupBy)
-				}
-			}
-			// 'assignee' was JQL/sprint-only; 'status' and 'statusCategory' work everywhere.
-			if flags.GroupBy == "assignee" && hasKey {
-				return fmt.Errorf("--group-by=assignee requires --jql or --sprint")
-			}
-
-			var ref string
-			if hasKey {
-				ref = args[0]
-			}
-			result, err := ShowRollup(cmd.Context(), flags, ref)
+			result, err := Effort(cmd.Context(), flags, args[0])
 			if err != nil {
 				return err
 			}
@@ -106,38 +81,138 @@ breakdown with a per-status breakdown of the direct children.`,
 			return nil
 		},
 	}
-	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
-	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON")
-	c.Flags().BoolVar(&flags.All, "all", false, "Fetch all children, bypassing the --limit cap")
-	c.Flags().IntVar(&flags.Limit, "limit", 100, "Max children to fetch per level (default 100); use --all to fetch everything")
+	addEffortSharedFlags(c, &flags)
 	c.Flags().IntVar(&flags.Depth, "depth", 1, "Levels to aggregate: 1 = direct children only, 2 = children + their children")
-	c.Flags().BoolVar(&flags.List, "list", false, "Print a per-child breakdown table beneath the summary")
-	c.Flags().StringVar(&flags.JQL, "jql", "", "Aggregate time tracking over JQL results instead of a hierarchy. Mutex with <KEY> and --sprint.")
-	c.Flags().IntVar(&flags.Sprint, "sprint", 0, "Aggregate over issues in this sprint id. Mutex with <KEY> and --jql.")
-	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Group rollup rows by this dimension. Supported: 'assignee' (JQL/sprint only), 'status', 'statusCategory'. Rows show Count/Planned/Remaining/Spent/SP.")
+	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Break the totals down by 'status' or 'statusCategory' (per-status breakdown of the direct children)")
+
+	c.AddCommand(newEffortJQLCmd(&flags), newEffortSprintCmd(&flags))
 	return c
 }
 
-// ShowRollup is the Layer 1 implementation for show rollup.
-func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string, error) {
-	// Validate --group-by before any I/O so the Layer 1 function is self-contained.
-	if flags.GroupBy != "" {
-		switch flags.GroupBy {
-		case "assignee", "status", "statusCategory":
-			// ok
-		default:
-			return "", fmt.Errorf("--group-by: supported values are 'assignee', 'status', 'statusCategory' — got %q", flags.GroupBy)
-		}
+// newEffortJQLCmd builds "effort jql <query>".
+func newEffortJQLCmd(flags *EffortFlags) *cobra.Command {
+	c := &cobra.Command{
+		Use:   "jql <query>",
+		Short: "Aggregate effort over a JQL result set (no hierarchy config needed)",
+		Long: `Aggregate time tracking and Story Points over the issues matched by a JQL
+query, then show how much of the planned time has been spent.
+
+The query is taken from the positional arguments (joined with spaces), so both
+of these work:
+
+  jiracli effort jql 'issueType = Epic AND fixVersion = "v2026-Q2"'
+  jiracli effort jql project = CAR AND statusCategory != Done
+
+Add --group-by to break the totals down:
+  assignee        — group by person
+  status          — group by status name (e.g. "In Progress", "Pending Review")
+  statusCategory  — group by status category (To Do, In Progress, Done)
+
+The --state / --open / --exclude-done / --since filters from the hierarchy mode
+apply here too.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			flags.JQL = strings.Join(args, " ")
+			flags.Sprint = 0
+			result, err := EffortQuery(cmd.Context(), *flags)
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), result)
+			return nil
+		},
 	}
-	hasKey := ref != ""
-	if flags.GroupBy == "assignee" && hasKey {
-		return "", fmt.Errorf("--group-by=assignee requires --jql or --sprint")
+	addEffortSharedFlags(c, flags)
+	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Break the totals down by 'assignee', 'status', or 'statusCategory'")
+	return c
+}
+
+// newEffortSprintCmd builds "effort sprint <id>".
+func newEffortSprintCmd(flags *EffortFlags) *cobra.Command {
+	c := &cobra.Command{
+		Use:   "sprint <id>",
+		Short: "Aggregate effort over a sprint's issues (no hierarchy config needed)",
+		Long: `Aggregate time tracking and Story Points over every issue in a sprint, then
+show how much of the planned time has been spent. <id> is the numeric sprint
+id (find it with 'jiracli sprint list --board <id>').
+
+Add --group-by to break the totals down:
+  assignee        — group by person
+  status          — group by status name
+  statusCategory  — group by status category (To Do, In Progress, Done)
+
+The --state / --open / --exclude-done / --since filters from the hierarchy mode
+apply here too.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.Atoi(strings.TrimSpace(args[0]))
+			if err != nil || id <= 0 {
+				return fmt.Errorf("sprint id must be a positive integer — got %q", args[0])
+			}
+			flags.Sprint = id
+			flags.JQL = ""
+			result, err := EffortQuery(cmd.Context(), *flags)
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), result)
+			return nil
+		},
+	}
+	addEffortSharedFlags(c, flags)
+	c.Flags().StringVar(&flags.GroupBy, "group-by", "", "Break the totals down by 'assignee', 'status', or 'statusCategory'")
+	return c
+}
+
+// addEffortSharedFlags registers the flags common to every effort mode.
+// --depth and --group-by differ per mode and are registered by each command.
+func addEffortSharedFlags(c *cobra.Command, flags *EffortFlags) {
+	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
+	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON")
+	c.Flags().BoolVar(&flags.All, "all", false, "Fetch all issues, bypassing the --limit cap")
+	c.Flags().IntVar(&flags.Limit, "limit", 100, "Max issues to fetch per level (default 100); use --all to fetch everything")
+	c.Flags().BoolVar(&flags.ExcludeDone, "exclude-done", false, "Skip issues in the Done status category")
+	c.Flags().BoolVar(&flags.Open, "open", false, "Count only non-Done issues (alias for --exclude-done)")
+	c.Flags().StringVar(&flags.State, "state", "", "Count only issues in this status category: todo, in-progress, done, all")
+	c.Flags().StringVar(&flags.Since, "since", "", "Only count issues updated on or after this date (e.g. -2w, -1d, 2024-01-01)")
+}
+
+// EffortQuery is the Layer 1 implementation for the flat-aggregation modes
+// (effort jql / effort sprint). Exactly one of flags.JQL or flags.Sprint is set
+// by the caller.
+func EffortQuery(ctx context.Context, flags EffortFlags) (string, error) {
+	switch flags.GroupBy {
+	case "", "assignee", "status", "statusCategory":
+		// ok
+	default:
+		return "", fmt.Errorf("--group-by: supported values are 'assignee', 'status', 'statusCategory' — got %q", flags.GroupBy)
+	}
+	filter, err := resolveStateFilter(flags.State, flags.ExcludeDone, flags.Open)
+	if err != nil {
+		return "", err
+	}
+	return effortJQL(ctx, flags, filter)
+}
+
+// Effort is the Layer 1 implementation for hierarchy-mode effort (effort <KEY>).
+func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) {
+	// Validate --group-by before any I/O. Hierarchy mode supports status /
+	// statusCategory; assignee grouping only makes sense over a flat result set.
+	switch flags.GroupBy {
+	case "", "status", "statusCategory":
+		// ok
+	case "assignee":
+		return "", fmt.Errorf("--group-by=assignee is only available in 'jiracli effort jql' or 'jiracli effort sprint'")
+	default:
+		return "", fmt.Errorf("--group-by: supported values in hierarchy mode are 'status', 'statusCategory' — got %q", flags.GroupBy)
 	}
 
-	// JQL / sprint path — no hierarchy subject needed.
-	if flags.JQL != "" || flags.Sprint != 0 {
-		return showRollupJQL(ctx, flags)
+	// Resolve the shared state/exclude-done filter (validates --state).
+	filter, err := resolveStateFilter(flags.State, flags.ExcludeDone, flags.Open)
+	if err != nil {
+		return "", err
 	}
+
 	// Resolve effective fetch limit: --all overrides --limit (0 = no cap in fetchNodes).
 	limit := flags.Limit
 	if flags.All {
@@ -146,7 +221,7 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 
 	parsed, err := jira.ParseRef(ref)
 	if err != nil || parsed.Kind != jira.RefIssue {
-		return "", fmt.Errorf("show rollup requires a plain issue key — got %q", ref)
+		return "", fmt.Errorf("effort requires a plain issue key — got %q", ref)
 	}
 	key := parsed.Key
 
@@ -176,6 +251,8 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 	if depth > 2 {
 		depth = 2 // guard — deeper would need recursive fetch, not yet supported
 	}
+	since := normaliseSince(flags.Since)
+	filterActive := filter.Category != "" || filter.ExcludeDone
 	// Fields to request when fetching children.
 	childFields := []string{"summary", "status", "issuetype", "assignee", "timetracking", "subtasks"}
 	if epicLinkField != "" {
@@ -201,7 +278,7 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 	}
 
 	// Derive child JQL from subject issue type.
-	childJQL := jira.ChildJQL(subjectRaw.Fields.IssueType.Name, key, epicLinkField, parentLinkField)
+	childJQL := withSince(jira.ChildJQL(subjectRaw.Fields.IssueType.Name, key, epicLinkField, parentLinkField), since)
 
 	// Fetch L1 children.
 	l1Nodes, l1Total, l1Truncated, err := fetchNodes(ctx, client, childJQL, childFields, limit, spField)
@@ -211,6 +288,18 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 
 	if len(l1Nodes) == 0 && l1Total == 0 {
 		return fmt.Sprintf("%s has no children — nothing to roll up.\n", key), nil
+	}
+
+	// Apply the client-side state/exclude-done filter to the fetched children.
+	// After filtering we can no longer trust the server-reported total or the
+	// truncation flag for the filtered subset, so pin them to what we counted.
+	if filterActive {
+		l1Nodes = filterRollupNodes(l1Nodes, filter)
+		l1Total = len(l1Nodes)
+		l1Truncated = false
+		if len(l1Nodes) == 0 {
+			return fmt.Sprintf("%s has no children matching %s — nothing to roll up.\n", key, filter.Label), nil
+		}
 	}
 
 	hasDeeperLevel := false
@@ -250,11 +339,16 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 				if l1.ChildrenTotal == 0 {
 					continue
 				}
-				l2JQL := jira.ChildJQL(l1.IssueType, l1.Key, epicLinkField, parentLinkField)
+				l2JQL := withSince(jira.ChildJQL(l1.IssueType, l1.Key, epicLinkField, parentLinkField), since)
 				nodes, total, trunc, fetchErr := fetchNodes(ctx, client, l2JQL, childFields, limit, spField)
 				if fetchErr != nil {
 					l2Truncated = true
 					continue
+				}
+				if filterActive {
+					nodes = filterRollupNodes(nodes, filter)
+					total = len(nodes)
+					trunc = false
 				}
 				l2Nodes = append(l2Nodes, nodes...)
 				l2Total += total
@@ -271,13 +365,6 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 			levels = append(levels, buildGroupedLevel(l2Nodes, l2Total, l2Truncated, flags.GroupBy, "Level 2"))
 		}
 
-		if flags.List {
-			levels[0].nodes = l1Nodes
-			if len(levels) > 1 {
-				levels[1].nodes = l2Nodes
-			}
-		}
-
 		if flags.JSON {
 			var out strings.Builder
 			for _, lv := range levels {
@@ -287,14 +374,13 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 					SubjectSummary:   subjectRaw.Fields.Summary,
 					SubjectRow:       jira.SubjectRowFromRaw(subjectRaw, spField),
 					Rows:             lv.rows,
-					Nodes:            lv.nodes,
 					HasDeeperLevel:   hasDeeperLevel,
 					MaxFetchedDepth:  depth,
 					GroupBy:          flags.GroupBy,
 				}
 				data, err := json.Marshal(t)
 				if err != nil {
-					return "", fmt.Errorf("marshal rollup: %w", err)
+					return "", fmt.Errorf("marshal effort: %w", err)
 				}
 				out.Write(data)
 				out.WriteByte('\n')
@@ -313,12 +399,17 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 			if l1.ChildrenTotal == 0 {
 				continue
 			}
-			l2JQL := jira.ChildJQL(l1.IssueType, l1.Key, epicLinkField, parentLinkField)
+			l2JQL := withSince(jira.ChildJQL(l1.IssueType, l1.Key, epicLinkField, parentLinkField), since)
 			nodes, total, trunc, fetchErr := fetchNodes(ctx, client, l2JQL, childFields, limit, spField)
 			if fetchErr != nil {
 				// fail-soft: record truncation but continue
 				l2Truncated = true
 				continue
+			}
+			if filterActive {
+				nodes = filterRollupNodes(nodes, filter)
+				total = len(nodes)
+				trunc = false
 			}
 			l2Nodes = append(l2Nodes, nodes...)
 			l2Total += total
@@ -359,19 +450,42 @@ func ShowRollup(ctx context.Context, flags ShowRollupFlags, ref string) (string,
 		tree.MaxFetchedDepth = 2
 	}
 
-	if flags.List {
-		tree.Nodes = l1Nodes
-	}
-
 	if flags.JSON {
 		data, err := json.Marshal(tree)
 		if err != nil {
-			return "", fmt.Errorf("marshal rollup: %w", err)
+			return "", fmt.Errorf("marshal effort: %w", err)
 		}
 		return string(data) + "\n", nil
 	}
 
 	return renderRollupTree(subjectRaw, tree, hasDeeperLevel, depth, l1Truncated, spField), nil
+}
+
+// filterRollupNodes keeps only nodes whose status category passes the filter.
+// An inactive filter returns the slice unchanged.
+func filterRollupNodes(nodes []jira.RollupNode, f jira.ChildFilter) []jira.RollupNode {
+	if f.Category == "" && !f.ExcludeDone {
+		return nodes
+	}
+	out := nodes[:0:0]
+	for _, n := range nodes {
+		if f.KeepCategory(n.StatusCategory) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// withSince appends an "updated >= <date>" clause to a JQL query.
+// Relative dates (leading '-') are passed unquoted; absolute dates are quoted.
+func withSince(jql, since string) string {
+	if since == "" {
+		return jql
+	}
+	if strings.HasPrefix(since, "-") {
+		return jql + " AND updated >= " + since
+	}
+	return jql + ` AND updated >= "` + since + `"`
 }
 
 // fetchNodes pages through a JQL search and returns RollupNodes.
@@ -530,9 +644,9 @@ func statusRowLess(rows []jira.RollupRow, categoryMode bool) func(i, j int) bool
 	}
 }
 
-// showRollupJQL aggregates time-tracking over an arbitrary JQL result set or sprint,
+// effortJQL aggregates time-tracking over an arbitrary JQL result set or sprint,
 // optionally grouped by a dimension.
-func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
+func effortJQL(ctx context.Context, flags EffortFlags, filter jira.ChildFilter) (string, error) {
 	// Resolve effective fetch limit: --all overrides --limit (0 = no cap in fetchNodes).
 	limit := flags.Limit
 	if flags.All {
@@ -548,6 +662,7 @@ func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 	if flags.Sprint != 0 {
 		jql = fmt.Sprintf("sprint = %d", flags.Sprint)
 	}
+	jql = withSince(jql, normaliseSince(flags.Since))
 	spField := entry.Hierarchy.StoryPointsField
 
 	fields := []string{"summary", "status", "issuetype", "assignee", "timetracking"}
@@ -557,7 +672,13 @@ func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 
 	nodes, total, truncated, err := fetchNodes(ctx, client, jql, fields, limit, spField)
 	if err != nil {
-		return "", fmt.Errorf("fetching issues for rollup: %w", err)
+		return "", fmt.Errorf("fetching issues for effort rollup: %w", err)
+	}
+	// Apply the client-side state/exclude-done filter.
+	if filter.Category != "" || filter.ExcludeDone {
+		nodes = filterRollupNodes(nodes, filter)
+		total = len(nodes)
+		truncated = false
 	}
 	if len(nodes) == 0 {
 		return fmt.Sprintf("no issues matched: %s\n", jql), nil
@@ -618,14 +739,10 @@ func showRollupJQL(ctx context.Context, flags ShowRollupFlags) (string, error) {
 		MaxFetchedDepth:  1,
 		GroupBy:          flags.GroupBy,
 	}
-	if flags.List {
-		tree.Nodes = nodes
-	}
-
 	if flags.JSON {
 		data, err := json.Marshal(tree)
 		if err != nil {
-			return "", fmt.Errorf("marshal rollup: %w", err)
+			return "", fmt.Errorf("marshal effort: %w", err)
 		}
 		return string(data) + "\n", nil
 	}
@@ -796,73 +913,14 @@ func renderRollupTree(subjectRaw jira.IssueRaw, tree jira.RollupTree, hasDeeperL
 
 	// ── Depth hints ──────────────────────────────────────────────────────────
 	if hasDeeperLevel && depth < 2 {
-		fmt.Fprintf(&sb, "  → pass --depth 2 to also aggregate grandchildren\n\n")
+		fmt.Fprintf(&sb, "  → pass --depth 2 to also aggregate grandchildren\n")
 	} else if depth >= 2 {
-		fmt.Fprintf(&sb, "  (depth 2 is the maximum — run show rollup on individual children to go deeper)\n\n")
+		fmt.Fprintf(&sb, "  (depth 2 is the maximum — run jiracli effort on individual children to go deeper)\n")
 	} else {
-		fmt.Fprintf(&sb, "  (leaf level reached — no deeper children)\n\n")
+		fmt.Fprintf(&sb, "  (leaf level reached — no deeper children)\n")
 	}
-
-	// ── --list per-child table ───────────────────────────────────────────────
-	if len(tree.Nodes) > 0 {
-		sb.WriteString(sectionLabel("Children:") + "\n")
-		const keyW = 14
-		const sumW = 52 // wider summary column
-		listRule := strings.Repeat("─", keyW+2+sumW+2+(colW+2)*4) + "\n"
-		fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-			keyW, "Key",
-			sumW, "Summary",
-			colW, "Planned",
-			colW, "Remaining",
-			colW, "Spent",
-			colW, "SP")
-		sb.WriteString("  " + listRule)
-
-		// Detect a shared prefix so we can elide the middle instead of the tail.
-		// Only activate when the common prefix is long enough to actually obscure
-		// the unique part — threshold: prefix longer than half the column.
-		summaries := make([]string, len(tree.Nodes))
-		for i, n := range tree.Nodes {
-			summaries[i] = n.Summary
-		}
-		commonPfx := jira.CommonRunePrefix(summaries)
-		useMidElide := commonPfx > sumW/2
-		const midPrefixKeep = 10 // runes of shared prefix to retain for context
-
-		for _, n := range tree.Nodes {
-			sp := "—"
-			if n.StoryPoints != nil {
-				sp = fmt.Sprintf("%g", *n.StoryPoints)
-			}
-			// Truncate summary; when nodes share a long prefix, elide the middle
-			// so the unique tail is always visible.
-			// Reserve 2 runes (space + ▸) for the HasChildren indicator.
-			effectiveW := sumW
-			if n.HasChildren {
-				effectiveW = sumW - 2
-			}
-			var sumTrunc string
-			if useMidElide {
-				sumTrunc = jira.TruncateMidPrefix(n.Summary, effectiveW, midPrefixKeep)
-			} else {
-				sumTrunc = jira.TruncateString(n.Summary, effectiveW)
-			}
-			if n.HasChildren {
-				sumTrunc += " ▸"
-			}
-			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-				keyW, n.Key,
-				sumW, sumTrunc,
-				colW, dashIfZero(n.OriginalEstimateSecs),
-				colW, dashIfZero(n.RemainingEstimateSecs),
-				colW, dashIfZero(n.TimeSpentSecs),
-				colW, sp)
-		}
-		if l1Truncated {
-			fmt.Fprintf(&sb, "  (first %d shown — pass --limit <n> or --limit 0 for all)\n", len(tree.Nodes))
-		}
-		sb.WriteByte('\n')
-	}
+	// Drill hint: the per-child breakdown lives in the hierarchy command.
+	fmt.Fprintf(&sb, "  → jiracli hierarchy %s   # per-child breakdown\n\n", tree.SubjectKey)
 
 	return sb.String()
 }
@@ -966,59 +1024,6 @@ func renderRollupHierarchyGrouped(subjectRaw jira.IssueRaw, levels []groupedLeve
 		if total.OriginalEstimateSecs > 0 {
 			bar := jira.FormatProgressBar(total.TimeSpentSecs, total.OriginalEstimateSecs, 24, clr)
 			fmt.Fprintf(&sb, "%s\n\n", bar)
-		}
-
-		// --list per-child table for this level.
-		if len(lv.nodes) > 0 {
-			sb.WriteString(sectionLabel("Children:") + "\n")
-			const keyW = 14
-			const sumW = 52
-			listRule := strings.Repeat("─", keyW+2+sumW+2+(colW+2)*4) + "\n"
-			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-				keyW, "Key",
-				sumW, "Summary",
-				colW, "Planned",
-				colW, "Remaining",
-				colW, "Spent",
-				colW, "SP")
-			sb.WriteString("  " + listRule)
-			summaries := make([]string, len(lv.nodes))
-			for i, n := range lv.nodes {
-				summaries[i] = n.Summary
-			}
-			commonPfx := jira.CommonRunePrefix(summaries)
-			useMidElide := commonPfx > sumW/2
-			const midPrefixKeep = 10
-			for _, n := range lv.nodes {
-				sp := "—"
-				if n.StoryPoints != nil {
-					sp = fmt.Sprintf("%g", *n.StoryPoints)
-				}
-				effectiveW := sumW
-				if n.HasChildren {
-					effectiveW = sumW - 2
-				}
-				var sumTrunc string
-				if useMidElide {
-					sumTrunc = jira.TruncateMidPrefix(n.Summary, effectiveW, midPrefixKeep)
-				} else {
-					sumTrunc = jira.TruncateString(n.Summary, effectiveW)
-				}
-				if n.HasChildren {
-					sumTrunc += " ▸"
-				}
-				fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-					keyW, n.Key,
-					sumW, sumTrunc,
-					colW, dashIfZero(n.OriginalEstimateSecs),
-					colW, dashIfZero(n.RemainingEstimateSecs),
-					colW, dashIfZero(n.TimeSpentSecs),
-					colW, sp)
-			}
-			if lv.truncated {
-				fmt.Fprintf(&sb, "  (first %d shown — pass --limit <n> or --limit 0 for all)\n", len(lv.nodes))
-			}
-			sb.WriteByte('\n')
 		}
 	}
 
@@ -1131,36 +1136,6 @@ func renderRollupJQL(tree jira.RollupTree) string {
 		}
 	}
 	sb.WriteByte('\n')
-
-	// --list per-issue table.
-	if len(tree.Nodes) > 0 {
-		sb.WriteString(sectionLabel("Issues:") + "\n")
-		const keyW = 14
-		const sumW = 52
-		listRule := strings.Repeat("─", keyW+2+sumW+2+(colW+2)*4) + "\n"
-		fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-			keyW, "Key",
-			sumW, "Summary",
-			colW, "Planned",
-			colW, "Remaining",
-			colW, "Spent",
-			colW, "SP")
-		sb.WriteString("  " + listRule)
-		for _, n := range tree.Nodes {
-			sp := "—"
-			if n.StoryPoints != nil {
-				sp = fmt.Sprintf("%g", *n.StoryPoints)
-			}
-			fmt.Fprintf(&sb, "  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
-				keyW, n.Key,
-				sumW, jira.TruncateString(n.Summary, sumW),
-				colW, dashIfZero(n.OriginalEstimateSecs),
-				colW, dashIfZero(n.RemainingEstimateSecs),
-				colW, dashIfZero(n.TimeSpentSecs),
-				colW, sp)
-		}
-		sb.WriteByte('\n')
-	}
 
 	fmt.Fprintf(&sb, "→ jiracli show <KEY>  # to drill into any issue\n")
 	return sb.String()

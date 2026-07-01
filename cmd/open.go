@@ -14,7 +14,7 @@ import (
 
 // OpenFlags holds parsed flag values for the open command.
 type OpenFlags struct {
-	Profile string
+	Profile  string
 	PrintURL bool
 }
 

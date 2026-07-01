@@ -259,7 +259,7 @@ jiracli/
 │   ├── comments.go            show comments <KEY>: paginated comment thread
 │   ├── history.go             show history <KEY>: paginated changelog
 │   ├── transitions.go         show transitions <KEY>: available workflow transitions
-│   ├── show_hierarchy.go      show hierarchy <KEY>: walk Initiative → Epic → Subject → Children
+│   ├── hierarchy.go           hierarchy <KEY> (top-level): locate an issue up the parent chain (Story → Epic → Initiative) and list descendants down (--depth); --exclude-done/--open/--state/--since filters
 │   ├── attachments.go         show attachments <KEY>: list attachments
 │   ├── attachment.go          attachment download helper (streaming to stdout or file)
 │   │
@@ -285,7 +285,8 @@ jiracli/
 │   ├── edit_sprint.go         edit sprint <KEY...> <target>: move issues into sprint or backlog
 │   │
 │   ├── create.go              create issue
-│   ├── rollup.go              show rollup [<KEY>]: aggregate time + SP across hierarchy levels or JQL/sprint sets (--depth, --list, --all, --limit, --jql, --sprint, --group-by)
+│   ├── effort.go              effort <KEY> (top-level, formerly show rollup) + subcommands `effort jql <query>` / `effort sprint <id>`: aggregate time + SP across hierarchy levels or a JQL/sprint result set (--depth, --all, --limit, --group-by, --exclude-done/--open/--state/--since); totals only. Layer 1: Effort() hierarchy, EffortQuery() jql/sprint
+│   ├── statefilter.go         shared --state/--exclude-done/--open filter resolution (stateCategory, resolveStateFilter) for hierarchy + effort
 │   ├── credentials.go         resolveEntry / resolveEntryAndStore — shared credential helpers
 │   ├── lookup.go              lookup command group root + suggestLabels helper
 │   ├── lookup_users.go        lookup users
@@ -407,8 +408,8 @@ Layer 2 presentation.
 | `render.go` | FormatRelative, WrapAt, FormatBytes, TruncateString, ColWidth, PadRight, IsASCIILetter, RenderWikiMarkup, AbbreviateChange, StatusCategoryRank, CommonRunePrefix, TruncateMidPrefix |
 | `badges.go` | `ColorsEnabled`, `StripAnsi`, `ColorIssueType`, `ColorStatusName`, `Bold`, `Dim` — ANSI badge helpers used by renderers and `internal/output` |
 | `hierarchy.go` | `HierarchyNode`, `HierarchyChain` (incl. `DescendantsTruncated`, `Siblings`/`SiblingsTotal`/`SiblingsTruncated`), `BuildHierarchy` (depth + since params), `fetchChildrenForParents`, `strategyForLevel`, `parentKeyForChild` — ancestor walk (Portfolio → ParentLink → Parent → EpicLink), sibling fetch (co-children of nearest ancestor, injected with `IsSubject`), batched multi-level children fetch, 400 batch-halving retry |
-| `hierarchy_render.go` | `RenderHierarchy` — colored/plain tree renderer; when siblings present, renders them as a unified tree with subject marked `▶` inline and its children expanding under it; `renderChildSubtree`; `writeSiblingSubjectRow`; `RenderHierarchyFlat` — tab-separated flat output with DFS order and negative-depth ancestors |
-| `rollup.go` | `RollupRow`, `RollupNode`, `RollupTree`, `ChildJQL`, `AggregateNodes`, `RollupNodeFromRaw`, `SubjectRowFromRaw`, `IssueTypeHasEpicLinkChildren` — hierarchy time/SP rollup types and aggregation helpers |
+| `hierarchy_render.go` | `ChildFilter` (category/exclude-done filter with `KeepCategory`), `RenderHierarchy` — colored/plain tree renderer; when siblings present, renders them as a unified tree with subject marked `▶` inline and its children expanding under it; `renderChildSubtree`; `writeSiblingSubjectRow`; `RenderHierarchyFlat` — tab-separated flat output with DFS order and negative-depth ancestors |
+| `rollup.go` | `RollupRow`, `RollupNode`, `RollupTree`, `ChildJQL`, `AggregateNodes`, `RollupNodeFromRaw`, `SubjectRowFromRaw`, `IssueTypeHasEpicLinkChildren`, `IssueTypeRollsUp` (Epic/portfolio detection for advertising `effort`) — hierarchy time/SP rollup types and aggregation helpers |
 
 ### HTTP error handling
 

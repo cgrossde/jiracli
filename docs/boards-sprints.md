@@ -590,8 +590,7 @@ Validation:
   ✓ sprint 2001 is active
   ⚠ sprint started 7d ago — late-add
 
-To apply:
-  re-run with --yes
+Apply with: re-run with --yes
 [exit:0 | Xms]
 ```
 
@@ -613,8 +612,7 @@ Effect:
 Validation:
   ✓ 1 key parsed
 
-To apply:
-  re-run with --yes
+Apply with: re-run with --yes
 [exit:0 | Xms]
 ```
 

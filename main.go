@@ -59,9 +59,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	// All other errors (missing flags, unknown commands, etc.) go through
 	// the presenter so output is always structured.
+	//
+	// When a command was invoked with no positional args and failed *because*
+	// a required arg is missing, show the full help (description + usage +
+	// flags) instead of the terse usage block — the description is the most
+	// useful thing to surface when someone types a bare command to discover it.
 	usageStr := ""
 	if found, _, findErr := root.Find(args); findErr == nil && found != nil {
-		usageStr = found.UsageString()
+		if isMissingRequiredArgErr(found, err) {
+			usageStr = renderHelp(found)
+		} else {
+			usageStr = found.UsageString()
+		}
 	}
 	output.Print(stdout, stderr, output.Result{
 		Stdout:   usageStr,
@@ -70,6 +79,34 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Elapsed:  time.Since(start),
 	})
 	return err
+}
+
+// isMissingRequiredArgErr reports whether err is the command's own argument
+// validation error triggered by receiving zero positional args. It re-runs the
+// command's Args validator against the parsed positional args so the detection
+// stays accurate regardless of cobra's error wording.
+func isMissingRequiredArgErr(cmd *cobra.Command, err error) bool {
+	if cmd == nil || cmd.Args == nil || !cmd.Runnable() {
+		return false
+	}
+	posArgs := cmd.Flags().Args()
+	if len(posArgs) != 0 {
+		return false
+	}
+	argErr := cmd.Args(cmd, posArgs)
+	return argErr != nil && argErr.Error() == err.Error()
+}
+
+// renderHelp captures the command's full help output (using the shared help
+// template: usage + flags + description) into a string.
+func renderHelp(cmd *cobra.Command) string {
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	if helpErr := cmd.Help(); helpErr != nil {
+		return cmd.UsageString()
+	}
+	return buf.String()
 }
 
 // buildRoot constructs the full Cobra command tree and returns the root command.
@@ -121,6 +158,18 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	WrapWithPresenter(searchCmd, stdout, stderr)
 	searchCmd.GroupID = "main"
 	root.AddCommand(searchCmd)
+
+	// hierarchy — locate an issue in its Initiative/Epic tree and list descendants.
+	hierarchyCmd := jiracmd.NewHierarchyCmd()
+	WrapWithPresenter(hierarchyCmd, stdout, stderr)
+	hierarchyCmd.GroupID = "main"
+	root.AddCommand(hierarchyCmd)
+
+	// effort — aggregate time + story points across a hierarchy or result set.
+	effortCmd := jiracmd.NewEffortCmd()
+	WrapWithPresenter(effortCmd, stdout, stderr)
+	effortCmd.GroupID = "main"
+	root.AddCommand(effortCmd)
 
 	// create — new issue.
 	createCmd := jiracmd.NewCreateCmd()

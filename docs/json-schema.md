@@ -112,7 +112,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
 - `assignee`, `reporter`: `null` when unset.
 - `parent`, `epic`: `null` when absent.
 - `portfolio`: `null` when absent (field omitted — `omitempty`); `IssueSummary` object with `key`, `summary`, `status`, `statusCategory`. Populated when hierarchy is configured for the profile and the issue has a portfolio-level parent. Summary is fetched with one extra API call.
-- `comments.truncated`: `true` when `total > items.length` (controlled by `--comments N`).
+- `comments.truncated`: `true` when `total > items.length` (the issue view inlines only the single latest comment; use `show comments <KEY>` for the full thread).
 - `historyTruncated`: `true` only on the changelog fallback path (DC <8.7) when the server capped results.
 - `timetracking`: object with `originalEstimateSeconds`, `remainingEstimateSeconds`, `timeSpentSeconds` (all `int64`). Omitted (`omitempty`) when absent or all-zero. Fetched on every default `show` call — no extra API round-trip.
 - `storyPoints`: `float64` | absent. Story Points value from the instance-specific custom field. Omitted when the field is not configured (`jiracli setup` discovers it) or not set on the issue.
@@ -311,7 +311,7 @@ One record per invocation. Produced inline in `cmd/me.go`.
 
 ## hierarchy
 
-Command: `jiracli show hierarchy <KEY> [--json] [--depth N] [--flat] [--since <date>]`
+Command: `jiracli hierarchy <KEY> [--json] [--depth N] [--flat] [--since <date>] [--exclude-done|--open|--state <cat>]`
 
 One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal/jira/hierarchy.go`).
 
@@ -387,12 +387,12 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 
 ---
 
-## rollup
+## effort
 
-Commands:
-- `jiracli show rollup <KEY> [--json] [--depth N] [--list] [--group-by status|statusCategory]` — hierarchy mode
-- `jiracli show rollup --sprint <id> [--group-by assignee|status|statusCategory] [--json]` — sprint mode
-- `jiracli show rollup --jql '<JQL>' [--group-by assignee|status|statusCategory] [--json]` — JQL mode
+Commands (formerly `show rollup`):
+- `jiracli effort <KEY> [--json] [--depth N] [--group-by status|statusCategory] [--exclude-done|--open|--state <cat>] [--since <date>]` — hierarchy mode
+- `jiracli effort jql '<JQL>' [--group-by assignee|status|statusCategory] [--json]` — JQL mode
+- `jiracli effort sprint <id> [--group-by assignee|status|statusCategory] [--json]` — sprint mode
 
 One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jira/rollup.go`).
 
@@ -443,7 +443,7 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `truncated` | bool | `true` when the fetch was capped and more items exist; omitted (`omitempty`) when false |
 | `issueTypeCounts` | map[string]int | Count per issue type, e.g. `{"Story":5,"Bug":3}`; omitted when empty |
 
-**`RollupNode` fields (each entry in `nodes`, populated only with `--list`):**
+**`RollupNode` fields** — the `nodes` array is always `null` in `effort` output (the per-child list was removed; use `jiracli hierarchy <KEY>` for a per-child breakdown). The type is documented here for JSON stability:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -469,12 +469,12 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `subjectSummary` | string | Summary of the subject |
 | `subject` | `RollupRow` | The subject's own time tracking and SP |
 | `rows` | `[]RollupRow` | Hierarchy mode: level aggregates (one row at `--depth 1`, two at `--depth 2`). `--group-by` mode: status-grouped rows, one per distinct value, sorted canonically. JQL/sprint mode: group rows or a single Total row. |
-| `nodes` | `[]RollupNode` | Per-child breakdown; `null` unless `--list` is passed |
+| `nodes` | `[]RollupNode` | Always `null` (per-child list removed; use `jiracli hierarchy`). Retained for JSON stability. |
 | `hasDeeperLevel` | bool | `true` when any L1 child has its own children |
 | `maxFetchedDepth` | int | Highest depth actually fetched (1 or 2) |
 | `groupBy` | string | `"assignee"`, `"status"`, or `"statusCategory"` when `--group-by` was used; omitted (`omitempty`) otherwise |
 
-> **JQL / sprint mode:** when `--jql` or `--sprint` is used, `subjectIssueType` is `""` and `subject` fields are all-zero. The `rows` array carries the group rows (`--group-by`) or a single `Total` row. `hasDeeperLevel` is always `false`.
+> **JQL / sprint mode:** for `effort jql` / `effort sprint`, `subjectIssueType` is `""` and `subject` fields are all-zero. The `rows` array carries the group rows (`--group-by`) or a single `Total` row. `hasDeeperLevel` is always `false`.
 
 > **Hierarchy `--group-by` mode:** one `RollupTree` JSON object is emitted per fetched level as NDJSON (not a single object). Each object's `rows` carries the status-grouped rows for that level; `groupBy` is set on every emitted object.
 
