@@ -171,7 +171,7 @@ jiracli search --jql 'project = PROJ AND sprint in openSprints() AND issuetype =
 jiracli search --jql 'project = PROJ AND sprint in openSprints()' --count-by assignee
 ```
 
-Supported fields: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. `--count-by` paginates internally — no `--limit` needed. For time totals (Planned/Spent/Remaining) instead of pure counts, use `effort --group-by status` instead.
+Supported fields: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. `--count-by` paginates internally — no `--limit` needed for scoped queries. For broad/unscoped queries matching more than 500 issues, it aborts with a corrective error rather than silently running for minutes; re-run with `--all` to count every match, or `--limit N` to cap the count and get a clearly-marked partial result. For time totals (Planned/Spent/Remaining) instead of pure counts, use `effort --group-by status` instead.
 
 ### Lookup metadata
 Jira metadata (components, versions, priorities, link types, users) is project-specific — never guess. Run `lookup` before any write that names one of them.

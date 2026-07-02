@@ -31,6 +31,14 @@ type SearchFlags struct {
 	JQL         string // --jql: entire query as one string, bypasses arg joining
 	Time        bool   // --time: shorthand for adding timeoriginalestimate, timeestimate, timespent columns
 	CountBy     string // --count-by: aggregate matching issues by this field; replaces issue list with a count table
+	All         bool   // --all: for --count-by, bypass the default safety cap and count every match
+
+	// LimitSet records whether --limit was explicitly passed by the caller
+	// (via cmd.Flags().Changed("limit")). --limit's default of 50 is
+	// meaningless for --count-by (which otherwise paginates to exhaustion),
+	// so we only treat --limit as an explicit cap for count-by when the user
+	// actually typed it.
+	LimitSet bool
 
 	// Pagination-hint overrides. When PageCmdBase is set (e.g. by "show
 	// assigned"), the next-page footer uses that base command and omits the
@@ -90,6 +98,7 @@ Fields reference (--fields / --fields-only):
 			if flags.JQL != "" && len(args) > 0 {
 				return fmt.Errorf("--jql and positional JQL arguments are mutually exclusive")
 			}
+			flags.LimitSet = cmd.Flags().Changed("limit")
 			if flags.CountBy != "" {
 				switch flags.CountBy {
 				case "status", "statusCategory", "priority", "assignee", "issueType", "resolution", "project":
@@ -118,7 +127,7 @@ Fields reference (--fields / --fields-only):
 	}
 	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
 	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON")
-	c.Flags().IntVar(&flags.Limit, "limit", 50, "Maximum results per page (1-100)")
+	c.Flags().IntVar(&flags.Limit, "limit", 50, "Maximum results per page (1-100). For --count-by, an explicit --limit instead caps the total issues counted (any positive value; see --count-by)")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().BoolVar(&flags.ExcludeDone, "exclude-done", false, "Exclude issues in the Done status category")
 	c.Flags().BoolVar(&flags.Open, "open", false, "Exclude Done issues (alias for --exclude-done)")
@@ -134,7 +143,10 @@ Fields reference (--fields / --fields-only):
 	c.Flags().StringVar(&flags.CountBy, "count-by", "",
 		"Aggregate matching issues by this field; replaces the issue list with a count/percent table. "+
 			"Supported: status, statusCategory, priority, assignee, issueType, resolution, project. "+
-			"Always fetches all matching issues (paginates internally); --limit and --page are ignored.")
+			"Paginates internally to exhaustion; --page is ignored. By default, refuses to run if more than "+
+			"500 issues match (broad queries can otherwise take minutes to hours) — re-run with --all to count "+
+			"every match, or pass an explicit --limit N to cap the count at N issues (reported as partial).")
+	c.Flags().BoolVar(&flags.All, "all", false, "For --count-by: count every matching issue, bypassing the 500-issue safety cap (ignored otherwise)")
 	return c
 }
 
@@ -1001,30 +1013,78 @@ func totalPages(total, limit int) int {
 
 // ── count-by aggregation ─────────────────────────────────────────────────────
 
-// runCountBy fetches all matching issues and emits a count/percent histogram table.
+// countByDefaultCap is the maximum number of matching issues --count-by will
+// paginate through when neither --all nor an explicit --limit is given.
+// Broad, unscoped count-by queries can otherwise paginate to exhaustion for
+// minutes or hours on a large instance with zero feedback in the interim —
+// this mirrors the "truncation is an error" guardrail effort/hierarchy
+// already use, just with a bigger cap suited to count-by's typically broader
+// queries.
+const countByDefaultCap = 500
+
+// runCountBy fetches matching issues (up to a safety cap unless overridden)
+// and emits a count/percent histogram table.
 func runCountBy(ctx context.Context, client *jira.Client, effectiveJQL string, flags SearchFlags) (string, error) {
-	return countByFromRawSearch(ctx, client, effectiveJQL, flags.CountBy, flags.JSON)
+	capN := 0 // 0 = unlimited
+	abortIfOverCap := false
+	switch {
+	case flags.All:
+		// unlimited, never abort
+	case flags.LimitSet:
+		capN = flags.Limit
+	default:
+		capN = countByDefaultCap
+		abortIfOverCap = true
+	}
+	return countByFromRawSearch(ctx, client, effectiveJQL, flags.CountBy, flags.JSON, capN, abortIfOverCap)
 }
 
-// countByFromRawSearch pages through search results and aggregates by the chosen dimension.
-// No cap — fetches everything.
-func countByFromRawSearch(ctx context.Context, client *jira.Client, jql, dim string, asJSON bool) (string, error) {
+// errCountByTooLarge reports that a --count-by aggregation would need to
+// paginate through more issues than the default safety cap allows.
+func errCountByTooLarge(matched, capN int) error {
+	return fmt.Errorf(
+		"count-by aborted: %d issues match this query, which exceeds the default safety cap of %d — "+
+			"counting that many could take a long time. Re-run with --all to count every matching issue, "+
+			"or add --limit N to cap the count at N issues (the result will be reported as partial)",
+		matched, capN)
+}
+
+// countByFromRawSearch pages through search results and aggregates by the
+// chosen dimension.
+//
+// capN bounds how many issues are counted: 0 means unlimited (paginate to
+// exhaustion). When capN > 0 and more issues match than capN:
+//   - if abortIfOverCap is true, the aggregation is refused outright
+//     (errCountByTooLarge) instead of silently running for a long time;
+//   - otherwise (an explicit --limit was given), counting stops at capN and
+//     the result is rendered with a note that the count is partial.
+func countByFromRawSearch(ctx context.Context, client *jira.Client, jql, dim string, asJSON bool, capN int, abortIfOverCap bool) (string, error) {
 	const pageSize = 100
 	page := 1
 	counts := map[string]int{}
 	order := []string{}
-	total := 0
-	truncated := false
+	total := 0   // issues actually counted
+	matched := 0 // server-reported total matches, from the first page
+	note := ""
 	for {
 		resp, err := client.Search(ctx, jql, page, pageSize, countByFields(dim))
 		if err != nil {
 			if total > 0 {
-				truncated = true
+				note = "Jira returned an error mid-paging; counts may be partial"
 				break
 			}
 			return "", fmt.Errorf("search (count-by): %w", err)
 		}
+		if page == 1 {
+			matched = resp.Total
+			if capN > 0 && matched > capN && abortIfOverCap {
+				return "", errCountByTooLarge(matched, capN)
+			}
+		}
 		for _, raw := range resp.Issues {
+			if capN > 0 && total >= capN {
+				break
+			}
 			key := extractDimension(raw, dim)
 			if _, seen := counts[key]; !seen {
 				order = append(order, key)
@@ -1032,8 +1092,12 @@ func countByFromRawSearch(ctx context.Context, client *jira.Client, jql, dim str
 			counts[key]++
 			total++
 		}
+		hitCap := capN > 0 && total >= capN
 		startAt := (page-1)*pageSize + len(resp.Issues)
-		if startAt >= resp.Total || len(resp.Issues) == 0 {
+		if hitCap || startAt >= resp.Total || len(resp.Issues) == 0 {
+			if hitCap && matched > total {
+				note = fmt.Sprintf("capped at --limit %d; %d issues matched in total — re-run with --all to count every match", capN, matched)
+			}
 			break
 		}
 		page++
@@ -1044,9 +1108,9 @@ func countByFromRawSearch(ctx context.Context, client *jira.Client, jql, dim str
 	// "total: 0" header rather than swapping in different prose for the
 	// empty case.
 	if asJSON {
-		return renderCountByJSON(dim, order, counts, total, jql, truncated)
+		return renderCountByJSON(dim, order, counts, total, matched, jql, note)
 	}
-	return renderCountByPlain(dim, order, counts, total, jql, truncated), nil
+	return renderCountByPlain(dim, order, counts, total, matched, jql, note), nil
 }
 
 // countByFields returns the minimal field set needed for the chosen dimension.
@@ -1144,10 +1208,14 @@ func dimensionHeader(dim string) string {
 }
 
 // renderCountByPlain emits a 3-column table: dimension value, count, percent.
-func renderCountByPlain(dim string, order []string, counts map[string]int, total int, jql string, truncated bool) string {
+func renderCountByPlain(dim string, order []string, counts map[string]int, total, matched int, jql, note string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "search: %s  (count by %s)\n", jql, dim)
-	fmt.Fprintf(&sb, "total: %d issues\n\n", total)
+	if note != "" && matched > total {
+		fmt.Fprintf(&sb, "total: %d of %d matched issues counted\n\n", total, matched)
+	} else {
+		fmt.Fprintf(&sb, "total: %d issues\n\n", total)
+	}
 
 	rows := make([]countRow, 0, len(order))
 	for _, k := range order {
@@ -1181,8 +1249,8 @@ func renderCountByPlain(dim string, order []string, counts map[string]int, total
 	}
 	sb.WriteString(rule)
 	fmt.Fprintf(&sb, "%-*s  %*d  %*s\n", labelW, "Total", colW, total, colW, "100.0%")
-	if truncated {
-		sb.WriteString("\n⚠ truncated — Jira returned an error mid-paging; counts may be partial\n")
+	if note != "" {
+		fmt.Fprintf(&sb, "\n⚠ %s\n", note)
 	}
 	return sb.String()
 }
@@ -1198,18 +1266,21 @@ type countByRecord struct {
 // countByMetaTrailer is the final NDJSON line of a --count-by response. Like the
 // _pagination trailer, its sole top-level key is underscore-prefixed so consumers
 // can detect a meta line without inspecting the payload. _meta carries the
-// aggregation summary (total issues counted, the JQL, and whether paging was cut
-// short by an upstream error).
+// aggregation summary: how many issues were counted, how many actually matched
+// the query (may exceed total when capped), the JQL, whether the count is
+// partial, and — when partial — a human-readable reason.
 type countByMetaTrailer struct {
 	Meta struct {
 		Total     int    `json:"total"`
+		Matched   int    `json:"matched"`
 		JQL       string `json:"jql"`
 		Truncated bool   `json:"truncated"`
+		Note      string `json:"note,omitempty"`
 	} `json:"_meta"`
 }
 
 // renderCountByJSON emits one NDJSON record per dimension value, then a _meta trailer.
-func renderCountByJSON(dim string, order []string, counts map[string]int, total int, jql string, truncated bool) (string, error) {
+func renderCountByJSON(dim string, order []string, counts map[string]int, total, matched int, jql, note string) (string, error) {
 	var sb strings.Builder
 	for _, k := range order {
 		pct := 0.0
@@ -1231,8 +1302,10 @@ func renderCountByJSON(dim string, order []string, counts map[string]int, total 
 	}
 	var meta countByMetaTrailer
 	meta.Meta.Total = total
+	meta.Meta.Matched = matched
 	meta.Meta.JQL = jql
-	meta.Meta.Truncated = truncated
+	meta.Meta.Truncated = note != ""
+	meta.Meta.Note = note
 	b, err := json.Marshal(meta)
 	if err != nil {
 		return "", fmt.Errorf("marshal count-by meta trailer: %w", err)

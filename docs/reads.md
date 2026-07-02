@@ -278,7 +278,7 @@ bypassing the join:
 | `--profile <name>` | default | Credential profile |
 | `--keys-only` | false | Print one issue key per line — no headers, no footer, no overflow. Bypasses Layer 2 presenter. |
 | `--time` | false | Show time-tracking columns: `Estimate`, `Remaining`, `Spent`. Shorthand for `--fields +timeoriginalestimate,+timeestimate,+timespent`. Ignored when `--fields-only` is used. |
-| `--count-by <field>` | — | Aggregate all matching issues by this field; replaces the issue list with a count/percent histogram. Supported: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. Paginates internally to exhaustion — `--limit` and `--page` are ignored. Mutually exclusive with `--keys-only`. |
+| `--count-by <field>` | — | Aggregate all matching issues by this field; replaces the issue list with a count/percent histogram. Supported: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`. Paginates internally; `--page` is ignored. Aborts if more than 500 issues match unless `--all` or an explicit `--limit` is given (see below). Mutually exclusive with `--keys-only`. |
 
 ### Default behaviour
 
@@ -383,11 +383,39 @@ Only the `key` field is fetched from the Jira API — no wasted field deserializ
 
     jiracli search --jql '<query>' --count-by <field>
 
-Replaces the issue list with a three-column count/percent table. Always paginates to exhaustion — `--limit` and `--page` are ignored. Mutually exclusive with `--keys-only`.
+Replaces the issue list with a three-column count/percent table. Paginates internally — `--page` is ignored. Mutually exclusive with `--keys-only`.
 
 Supported fields: `status`, `statusCategory`, `priority`, `assignee`, `issueType`, `resolution`, `project`.
 
-**Plain-text output shape:**
+**Safety cap.** Broad, unscoped `--count-by` queries can match tens or hundreds of thousands of issues on a large instance, taking minutes to hours to paginate to exhaustion. To guard against this:
+
+- By default, if more than **500** issues match, the command aborts with a corrective error instead of running:
+
+  ```
+  count-by aborted: 227348 issues match this query, which exceeds the default safety cap of 500 —
+  counting that many could take a long time. Re-run with --all to count every matching issue, or add
+  --limit N to cap the count at N issues (the result will be reported as partial)
+  ```
+
+- Pass `--all` to bypass the cap and count every matching issue, however many there are.
+- Pass an explicit `--limit N` to cap the count at `N` issues instead of aborting. The command then runs and reports the count as partial:
+
+  ```
+  search: updated >= -3d  (count by project)
+  total: 200 of 227348 matched issues counted
+
+  Project                      Count   Percent
+  ────────────────────────────────────────────
+  XPR                            200    100.0%
+  ────────────────────────────────────────────
+  Total                          200    100.0%
+
+  ⚠ capped at --limit 200; 227348 issues matched in total — re-run with --all to count every match
+  ```
+
+- If the query matches 500 or fewer issues, `--all`/`--limit` are unnecessary — the count-by table runs exactly as before.
+
+**Plain-text output shape (uncapped):**
 
 ```
 search: issueType = Epic AND fixVersion = "v2026-Q2"  (count by status)
@@ -405,12 +433,12 @@ Total                        22   100.0%
 
 `status` and `statusCategory` use canonical ordering (blocked → open → in-progress → done). Other dimensions sort by count descending.
 
-**JSON output (`--json`):** one NDJSON record per value, then a `_meta` trailer:
+**JSON output (`--json`):** one NDJSON record per value, then a `_meta` trailer. `_meta.matched` is the server-reported total match count (may exceed `_meta.total` when capped); `_meta.note` is present only when `truncated` is `true`:
 
 ```ndjson
 {"dimension":"status","value":"Open","count":3,"percent":13.6}
 {"dimension":"status","value":"In Progress","count":7,"percent":31.8}
-{"_meta":{"total":22,"jql":"...","truncated":false}}
+{"_meta":{"total":22,"matched":22,"jql":"...","truncated":false}}
 ```
 
 ---
