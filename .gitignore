@@ -1,0 +1,11 @@
+# Build output
+jiracli
+dist/
+
+# Go test cache / coverage
+*.test
+*.out
+coverage.html
+
+# macOS
+.DS_Store

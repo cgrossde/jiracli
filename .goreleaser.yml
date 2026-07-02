@@ -1,0 +1,65 @@
+version: 2
+
+project_name: jiracli
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: jiracli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/cgrossde/jiracli/cmd.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+release:
+  github:
+    owner: cgrossde
+    name: jiracli
+  draft: false
+  make_latest: true
+
+homebrew_casks:
+  - name: jiracli
+    binaries:
+      - jiracli
+    repository:
+      owner: cgrossde
+      name: homebrew
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/cgrossde/jiracli"
+    description: "Easy, agent-friendly & scriptable Jira access"
+    license: "MIT"
+    generate_completions_from_executable:
+      executable: "bin/jiracli"
+      args:
+        - completion
+      shell_parameter_format: cobra
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/jiracli"]
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch

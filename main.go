@@ -256,6 +256,12 @@ func buildRoot(stdout, stderr io.Writer) *cobra.Command {
 	configCmd.GroupID = "util"
 	root.AddCommand(configCmd)
 
+	// version — print build version.
+	versionCmd := jiracmd.NewVersionCmd()
+	WrapWithPresenter(versionCmd, stdout, stderr)
+	versionCmd.GroupID = "util"
+	root.AddCommand(versionCmd)
+
 	return root
 }
 
