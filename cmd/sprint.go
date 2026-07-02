@@ -114,7 +114,7 @@ Examples:
 	c.Flags().IntVar(&flags.Board, "board", 0, "Scrum board ID (required)")
 	c.Flags().StringVar(&flags.State, "state", "", "Comma-separated states: active, future, closed, all. Empty = default view (active, future, and sprints closed within --closed-within days)")
 	c.Flags().BoolVar(&flags.All, "all", false, "Show every sprint (all states, full history); disables the recency window")
-	c.Flags().IntVar(&flags.ClosedWithin, "closed-within", 7, "Include closed sprints whose endDate is within this many days (default view only; ignored with --all or --after/--before)")
+	c.Flags().IntVar(&flags.ClosedWithin, "closed-within", 7, "Include closed sprints whose endDate is within this many days (default view only; ignored with --all, --state, or --after/--before)")
 	c.Flags().IntVar(&flags.Limit, "limit", 50, "Max results per page")
 	c.Flags().IntVar(&flags.Page, "page", 1, "Page number (1-indexed)")
 	c.Flags().StringVar(&flags.NameContains, "name-contains", "", "Case-insensitive substring filter on sprint name (client-side; fetches all sprints for the board)")
@@ -264,10 +264,14 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 	}
 
 	hasDateFilter := flags.After != "" || flags.Before != ""
-	// The recency window drives the default view. It is disabled by --all, by an
-	// explicit --state all, or by a date-range filter (which defines its own
-	// horizon).
-	windowDisabled := flags.All || hasDateFilter || strings.EqualFold(strings.TrimSpace(flags.State), "all")
+	// The recency window drives the default view (active + future + closed
+	// within --closed-within days). It is disabled by --all, by a date-range
+	// filter (which defines its own horizon), or by ANY explicit --state —
+	// otherwise e.g. "--state closed" would silently be restricted to the
+	// closed-within window instead of returning the board's full closed
+	// history, which is misleading (it can report "no sprints found" on
+	// boards whose closed sprints are all older than the window).
+	windowDisabled := flags.All || hasDateFilter || strings.TrimSpace(flags.State) != ""
 
 	// Fetch the working set of sprints.
 	var allSprints []jira.Sprint
