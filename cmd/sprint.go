@@ -120,7 +120,7 @@ Examples:
 	c.Flags().StringVar(&flags.NameContains, "name-contains", "", "Case-insensitive substring filter on sprint name (client-side; fetches all sprints for the board)")
 	c.Flags().StringVar(&flags.After, "after", "", "Keep sprints whose endDate is on/after this YYYY-MM-DD date (fetches full history)")
 	c.Flags().StringVar(&flags.Before, "before", "", "Keep sprints whose startDate is on/before this YYYY-MM-DD date (fetches full history)")
-	c.Flags().StringVar(&flags.Sort, "sort", "", "Sort by start date: 'asc' or 'desc'. Defaults to 'desc' when --state is exactly 'closed', else 'asc'.")
+	c.Flags().StringVar(&flags.Sort, "sort", "", "Sort by start date: 'asc' or 'desc'. Defaults to 'desc' when --state is exactly 'closed', else 'asc'. Falls back to GreenHopper sequence, then sprint id, for sprints without a resolved date — see docs/boards-sprints.md#sprint-ordering-caveats.")
 	c.Flags().BoolVar(&flags.NoCache, "no-cache", false, "Bypass local cache")
 	return c
 }
@@ -273,8 +273,11 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 	// boards whose closed sprints are all older than the window).
 	windowDisabled := flags.All || hasDateFilter || strings.TrimSpace(flags.State) != ""
 
-	// Fetch the working set of sprints.
+	// Fetch the working set of sprints. needsDateResolution is set when the
+	// working set came from the dateless GreenHopper fast path and must be
+	// resolved (bulk-backfilled, then mopped up) before sorting — see below.
 	var allSprints []jira.Sprint
+	var needsDateResolution bool
 	switch {
 	case hasDateFilter:
 		// Date-range filters need every sprint's dates. Use the complete
@@ -288,8 +291,7 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 			return "", err
 		}
 	case windowDisabled:
-		// --all / --state all (no date filter): full history, all states. Dates
-		// are hydrated for the displayed page only (below), keeping this cheap.
+		// --all / --state all (no date filter): full history, all states.
 		sprints, ghErr := client.ListSprintNames(ctx, flags.Board, store, flags.NoCache)
 		if ghErr != nil {
 			slog.Warn("sprintquery unavailable, falling back to paged listing", "board", flags.Board, "err", ghErr)
@@ -300,6 +302,10 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 				}
 				return "", ghErr
 			}
+		} else {
+			// GreenHopper's sprintquery gives id/name/state only — dates are
+			// resolved below, on the state-filtered set, right before sorting.
+			needsDateResolution = true
 		}
 		allSprints = sprints
 	default:
@@ -358,27 +364,34 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 		filtered = append(filtered, s)
 	}
 
-	// Sort by StartDate; fall back to ID when StartDate is absent.
+	if needsDateResolution {
+		// Resolve real dates on the (already state-filtered, so typically much
+		// smaller than the full board history) working set before sorting:
+		//
+		//  1. Bulk-backfill closed sprints via a handful of paged reads — cheap
+		//     regardless of history length (see BulkBackfillClosedDates).
+		//  2. Mop up whatever's left dateless — the bulk endpoint's own small,
+		//     roughly constant blind spot, plus any non-closed sprint without a
+		//     date (e.g. a future sprint that hasn't started) — via per-sprint
+		//     hydration (HydrateSprintDates). Doing this BEFORE the sort, not
+		//     after, matters: a sprint left dateless at sort time falls back to
+		//     Sequence/ID ordering (sprintSortLess), which is only reliable when
+		//     compared against another dateless sprint. Left unresolved, a
+		//     mop-up candidate would instead be compared against already-dated
+		//     neighbors and shoved to a sort extreme instead of interleaved into
+		//     its true chronological position.
+		//
+		// Both steps are best-effort and bounded: whatever remains dateless
+		// after both (e.g. a genuinely deleted/inaccessible sprint) still falls
+		// back to Sequence/ID ordering rather than erroring.
+		filtered = client.BulkBackfillClosedDates(ctx, flags.Board, filtered, store, flags.NoCache)
+		filtered = client.HydrateSprintDates(ctx, filtered)
+	}
+
+	// Sort by StartDate; fall back to Sequence, then ID, when StartDate is
+	// absent — see sprintSortLess.
 	sort.SliceStable(filtered, func(i, j int) bool {
-		si := parseDateOnly(filtered[i].StartDate)
-		sj := parseDateOnly(filtered[j].StartDate)
-		if si.IsZero() && sj.IsZero() {
-			// both missing dates: sort by ID
-			if sortDir == "desc" {
-				return filtered[i].ID > filtered[j].ID
-			}
-			return filtered[i].ID < filtered[j].ID
-		}
-		if si.IsZero() {
-			return sortDir != "desc" // no date → sort after dated entries in asc, before in desc
-		}
-		if sj.IsZero() {
-			return sortDir == "desc"
-		}
-		if sortDir == "desc" {
-			return si.After(sj)
-		}
-		return si.Before(sj)
+		return sprintSortLess(filtered[i], filtered[j], sortDir)
 	})
 
 	// Paginate the filtered result.
@@ -394,10 +407,12 @@ func sprintList(ctx context.Context, flags sprintListFlags) (string, error) {
 	page1Sprints := filtered[start:end]
 	isLast := end >= total
 
-	// The GreenHopper names endpoint omits dates. Hydrate them for just the
-	// displayed page (bounded-parallel, ~one round-trip per shown sprint) so the
-	// date column is populated without paging the whole history. On the paged
-	// date path the sprints already carry dates, so this is a no-op.
+	// Safety net: every code path above already resolves dates on its working
+	// set before this point (hasDateFilter via ListAllSprintsHydrated,
+	// windowDisabled via the bulk-backfill+mop-up above, the default view via
+	// its own early-stop hydration), so this is normally a no-op. It only does
+	// real work — bounded to the displayed page — if a sprint still lacks
+	// dates despite that (e.g. a genuinely inaccessible sprint).
 	page1Sprints = client.HydrateSprintDates(ctx, page1Sprints)
 
 	return renderSprintList(flags, page1Sprints, isLast, page, limit, total), nil
@@ -845,6 +860,56 @@ func buildSprintListNextCmd(flags sprintListFlags, nextPage, limit int) string {
 		parts = append(parts, "--no-cache")
 	}
 	return "next: " + strings.Join(parts, " ")
+}
+
+// sprintSortLess reports whether sprint a should sort before sprint b under
+// sortDir ("asc" or "desc"). Real start dates are the primary ordering key.
+// When one or both sprints lack a resolved start date, ordering falls back to
+// lessBySequenceThenID.
+func sprintSortLess(a, b jira.Sprint, sortDir string) bool {
+	da := parseDateOnly(a.StartDate)
+	db := parseDateOnly(b.StartDate)
+	if da.IsZero() && db.IsZero() {
+		return lessBySequenceThenID(a, b, sortDir)
+	}
+	if da.IsZero() {
+		return sortDir != "desc" // no date → sort before dated entries in asc, after in desc
+	}
+	if db.IsZero() {
+		return sortDir == "desc"
+	}
+	if sortDir == "desc" {
+		return da.After(db)
+	}
+	return da.Before(db)
+}
+
+// lessBySequenceThenID orders two sprints that both lack a resolved start
+// date — the sort fallback path exercised by --all and any explicit --state
+// when BulkBackfillClosedDates couldn't find a date either.
+//
+// GreenHopper's Sequence field (an instance-wide board-position/creation-order
+// counter, only populated via ListSprintNames) is preferred over sprint ID:
+// on real Jira DC instances, sprint IDs are not reliably chronological (board
+// migrations, cross-project ID pools, renumbering) while Sequence tracks true
+// creation order far more closely. It is still an approximation, not a
+// guarantee — see docs/boards-sprints.md#sprint-ordering-caveats for measured
+// error rates from a real board.
+//
+// When Sequence is unavailable on both sides (zero on both — e.g. sprints
+// sourced from the ListAllSprintsPaged fallback, which doesn't carry it), ID
+// is used as the last-resort tiebreaker.
+func lessBySequenceThenID(a, b jira.Sprint, sortDir string) bool {
+	if a.Sequence == 0 && b.Sequence == 0 {
+		if sortDir == "desc" {
+			return a.ID > b.ID
+		}
+		return a.ID < b.ID
+	}
+	if sortDir == "desc" {
+		return a.Sequence > b.Sequence
+	}
+	return a.Sequence < b.Sequence
 }
 
 // parseDateOnly parses a Jira date/datetime string to a time.Time at midnight UTC.

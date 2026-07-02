@@ -142,6 +142,77 @@ func TestBuildSprintListNextCmd(t *testing.T) {
 	}
 }
 
+func TestLessBySequenceThenID(t *testing.T) {
+	cases := []struct {
+		name    string
+		a, b    jira.Sprint
+		sortDir string
+		want    bool // a should sort before b
+	}{
+		{
+			name:    "sequence beats non-chronological id, asc",
+			a:       jira.Sprint{ID: 11113, Sequence: 15762}, // real-world example: high seq, "low-ish" id
+			b:       jira.Sprint{ID: 11227, Sequence: 11112},
+			sortDir: "asc",
+			want:    false, // b's sequence is lower, so b sorts first
+		},
+		{
+			name:    "sequence beats non-chronological id, desc",
+			a:       jira.Sprint{ID: 11113, Sequence: 15762},
+			b:       jira.Sprint{ID: 11227, Sequence: 11112},
+			sortDir: "desc",
+			want:    true, // a's sequence is higher, so a sorts first
+		},
+		{
+			name:    "both sequences zero falls back to id, asc",
+			a:       jira.Sprint{ID: 5},
+			b:       jira.Sprint{ID: 10},
+			sortDir: "asc",
+			want:    true,
+		},
+		{
+			name:    "both sequences zero falls back to id, desc",
+			a:       jira.Sprint{ID: 5},
+			b:       jira.Sprint{ID: 10},
+			sortDir: "desc",
+			want:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := lessBySequenceThenID(tc.a, tc.b, tc.sortDir)
+			if got != tc.want {
+				t.Errorf("lessBySequenceThenID(%+v, %+v, %q) = %v, want %v", tc.a, tc.b, tc.sortDir, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSprintSortLess_datedVsDateless(t *testing.T) {
+	// Existing (unchanged) convention: a dateless sprint sorts before dated
+	// ones in ascending order, and after them in descending order — see the
+	// comment on sprintSortLess.
+	dated := jira.Sprint{ID: 999, Sequence: 1, StartDate: "2020-06-01"}
+	dateless := jira.Sprint{ID: 1, Sequence: 999}
+	if !sprintSortLess(dateless, dated, "asc") {
+		t.Error("dateless sprint should sort before a dated one in asc order")
+	}
+	if sprintSortLess(dateless, dated, "desc") {
+		t.Error("dated sprint should sort before a dateless one in desc order")
+	}
+}
+
+func TestSprintSortLess_bothDated_sortsByRealDate(t *testing.T) {
+	older := jira.Sprint{ID: 100, Sequence: 5, StartDate: "2018-01-01"}
+	newer := jira.Sprint{ID: 1, Sequence: 1, StartDate: "2019-01-01"} // misleading id/sequence
+	if !sprintSortLess(older, newer, "asc") {
+		t.Error("older sprint should sort before newer in asc order, regardless of id/sequence")
+	}
+	if !sprintSortLess(newer, older, "desc") {
+		t.Error("newer sprint should sort before older in desc order, regardless of id/sequence")
+	}
+}
+
 func TestBuildSprintListNextCmd_defaultsOmitted(t *testing.T) {
 	got := buildSprintListNextCmd(sprintListFlags{Board: 1, ClosedWithin: 7}, 2, 50)
 	for _, unwanted := range []string{"--all", "--state", "--closed-within", "--no-cache", "--sort"} {

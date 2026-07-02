@@ -545,7 +545,8 @@ One record per sprint. Produced by `internal/jira.Sprint` (`internal/jira/agile.
   "endDate":       "2026-06-29T23:59:59.000Z",
   "activatedDate": "2026-06-15T00:00:00.000Z",
   "originBoardId": 101,
-  "goal":          "Ship login redesign"
+  "goal":          "Ship login redesign",
+  "sequence":      2001
 }
 ```
 
@@ -553,6 +554,7 @@ One record per sprint. Produced by `internal/jira.Sprint` (`internal/jira/agile.
 - `state`: `"active"`, `"future"`, or `"closed"`.
 - `startDate`, `endDate`, `activatedDate`, `goal`: omitted (`omitempty`) when absent.
 - `originBoardId`: the board this sprint was created on (may differ from the queried board when sprints are shared).
+- `sequence`: GreenHopper's board-position/creation-order counter. Present only when the sprint was sourced from the `sprintquery` fast path (`sprint list` with `--all`, an explicit `--state`, or the default view); omitted (`omitempty`) otherwise, e.g. always absent on `sprint show`/`sprint current` (`GET /sprint/<id>` doesn't return it). It's a fallback ordering signal, not a guaranteed chronological one — see `docs/boards-sprints.md#sprint-ordering-caveats`.
 
 Pagination trailer:
 - All queries (the default recency view, `--all`, and filtered/sorted queries) page over an in-memory working set and report real figures: `{"_pagination":{"page":1,"pages":3,"total":120,"next_page":2,"has_more":true}}`.

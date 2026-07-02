@@ -119,6 +119,18 @@ type Sprint struct {
 	ActivatedDate string `json:"activatedDate,omitempty"`
 	OriginBoardID int    `json:"originBoardId,omitempty"`
 	Goal          string `json:"goal,omitempty"`
+
+	// Sequence is GreenHopper's board-position/creation-order counter,
+	// populated only via ListSprintNames (the legacy sprintquery endpoint —
+	// see its doc comment). It is a much better chronology proxy than ID
+	// when real dates aren't available: on real Jira DC instances, sprint
+	// IDs are not reliably chronological (board migrations, cross-project ID
+	// pools, renumbering), while Sequence tracks true creation order far
+	// more closely. It is still an approximation, not a guarantee — see
+	// docs/boards-sprints.md#sprint-ordering-caveats for measured error
+	// rates. Zero when unavailable (e.g. sprints sourced from
+	// ListAllSprintsPaged, which doesn't carry this field).
+	Sequence int `json:"sequence,omitempty"`
 }
 
 // AgileConfig is per-instance Agile configuration, mirroring keychain.AgileConfig.
@@ -416,7 +428,9 @@ func (c *Client) ListSprintNames(ctx context.Context, boardID int, store *cache.
 			Name:          s.Name,
 			State:         strings.ToLower(s.State), // normalize to lowercase to match agile/1.0
 			OriginBoardID: env.RapidViewID,
-			// StartDate / EndDate intentionally empty — call HydrateSprintDates if needed
+			Sequence:      s.Sequence,
+			// StartDate / EndDate intentionally empty — call HydrateSprintDates
+			// (or, for closed sprints in bulk, BulkBackfillClosedDates) if needed.
 		})
 	}
 	if !noCache && store != nil {
@@ -471,6 +485,76 @@ func (c *Client) HydrateSprintDates(ctx context.Context, sprints []Sprint) []Spr
 	}
 	close(idx)
 	wg.Wait()
+	return sprints
+}
+
+// maxBulkBackfillPages bounds how many pages BulkBackfillClosedDates reads
+// from the native paged closed-sprint endpoint. Each page holds up to 100
+// sprints, so the default caps the call at 500 sprints — enough to fully
+// cover the vast majority of boards in a small, constant number of
+// round-trips, while keeping the worst case (a board with thousands of
+// closed sprints) bounded rather than degenerating into per-sprint hydration.
+const maxBulkBackfillPages = 5
+
+// BulkBackfillClosedDates opportunistically fills StartDate/EndDate on
+// dateless closed sprints using the native paged Agile endpoint
+// (GET /board/{id}/sprint?state=closed), which returns real dates for every
+// sprint it lists — no per-sprint round-trip needed, unlike GetSprint/
+// HydrateSprintDates.
+//
+// This endpoint is deliberately NOT used as the primary source for the full
+// closed-sprint history (see ListSprintNames's doc comment): it has been
+// observed, empirically, to under-report on boards with long sprint
+// histories — one production board returned only 50 of 55 closed sprints,
+// silently dropping the other 5 with no error or truncation signal. Trusting
+// it as a complete listing would silently corrupt totals elsewhere (e.g.
+// --after/--before, effort rollups). As a bulk *backfill* for date
+// enrichment that risk doesn't apply: sprints it happens to miss simply keep
+// their zero dates, and the caller (sprint list's sort) falls back to
+// Sequence-based ordering for those — see docs/boards-sprints.md#sprint-ordering-caveats.
+//
+// Bounded to maxBulkBackfillPages page reads regardless of board size, so
+// cost is a small constant rather than O(number of closed sprints) the way
+// per-sprint hydration is. Sprints that already carry a date, or aren't
+// closed, are left untouched. Page 1 reuses ListSprintsCached (7-day TTL);
+// subsequent pages (needed only on boards with >100 closed sprints) are not
+// cached.
+func (c *Client) BulkBackfillClosedDates(ctx context.Context, boardID int, sprints []Sprint, store *cache.Store, noCache bool) []Sprint {
+	needed := make(map[int]int, len(sprints)) // sprint id -> index into sprints
+	for i, s := range sprints {
+		if strings.EqualFold(s.State, "closed") && s.StartDate == "" && s.EndDate == "" {
+			needed[s.ID] = i
+		}
+	}
+	if len(needed) == 0 {
+		return sprints
+	}
+
+	for page := 1; page <= maxBulkBackfillPages; page++ {
+		var batch []Sprint
+		var isLast bool
+		var err error
+		if page == 1 {
+			batch, isLast, err = c.ListSprintsCached(ctx, boardID, []string{"closed"}, 1, 100, store, noCache)
+		} else {
+			batch, isLast, err = c.ListSprints(ctx, boardID, []string{"closed"}, page, 100)
+		}
+		if err != nil {
+			// Best-effort: leave remaining sprints dateless. The caller
+			// falls back to Sequence/ID ordering for them.
+			break
+		}
+		for _, b := range batch {
+			if i, ok := needed[b.ID]; ok {
+				sprints[i].StartDate = b.StartDate
+				sprints[i].EndDate = b.EndDate
+				delete(needed, b.ID)
+			}
+		}
+		if isLast || len(batch) == 0 || len(needed) == 0 {
+			break
+		}
+	}
 	return sprints
 }
 
