@@ -57,7 +57,13 @@ func BuildHierarchy(
 	fetchAll bool,
 	depth int,
 	since string,
+	filter ChildFilter,
 ) (HierarchyChain, error) {
+	// filterClause restricts children/siblings/descendants to a status category
+	// server-side, so the Jira-reported totals and pagination already reflect
+	// the filter. Applied everywhere sinceClause is (except inline sub-tasks,
+	// which are filtered client-side below since they are never paginated).
+	filterClause := filter.JQLClause()
 	// Build the base fields list for the subject fetch.
 	baseFieldSlice := []string{"summary", "status", "issuetype", "assignee", "subtasks", "parent"}
 	baseFieldSlice = append(baseFieldSlice, hf.FieldList()...)
@@ -128,7 +134,7 @@ func BuildHierarchy(
 	// fetch wraps fetchAllChildren / single-page based on the fetchAll flag.
 	// since is automatically appended to every JQL expression.
 	fetch := func(jql string) ([]HierarchyNode, int, error) {
-		jql += sinceClause
+		jql += sinceClause + filterClause
 		if fetchAll {
 			return fetchAllChildren(ctx, c, jql, childFields)
 		}
@@ -190,7 +196,12 @@ func BuildHierarchy(
 		}
 		if childrenTotal == 0 && childrenError == "" {
 			// Fall back to subtasks (already fully fetched inline with the subject).
+			// These are never paginated, so filtering them client-side is complete
+			// and accurate — mirroring the server-side filter applied to JQL fetches.
 			for _, s := range subjectRaw.Fields.Subtasks {
+				if !filter.KeepCategory(s.Fields.Status.StatusCategory.Name) {
+					continue
+				}
 				a := ""
 				if s.Fields.Assignee != nil {
 					a = s.Fields.Assignee.DisplayName
@@ -246,7 +257,7 @@ func BuildHierarchy(
 			if !jqlReady {
 				break
 			}
-			byParent, levelTotal, err := fetchChildrenForParents(ctx, c, parentKeys, strategy, hf, portfolioFieldName, filteredFields, fetchAll, since)
+			byParent, levelTotal, err := fetchChildrenForParents(ctx, c, parentKeys, strategy, hf, portfolioFieldName, filteredFields, fetchAll, since, filterClause)
 			if err != nil {
 				break // fail-soft: keep what we have
 			}
@@ -291,7 +302,11 @@ func BuildHierarchy(
 					sibFields = append(sibFields, fid)
 				}
 			}
-			byParent, total, serr := fetchChildrenForParents(ctx, c, []string{parentNode.Key}, strategy, hf, portfolioFieldName, sibFields, fetchAll, "")
+			// Siblings intentionally ignore --since (they are context, not the
+			// subject) but honor the status filter so --open/--state stay consistent.
+			// The subject itself is re-injected below, so it is always shown even
+			// when the filter would exclude it.
+			byParent, total, serr := fetchChildrenForParents(ctx, c, []string{parentNode.Key}, strategy, hf, portfolioFieldName, sibFields, fetchAll, "", filterClause)
 			if serr == nil {
 				rawSibs := byParent[parentNode.Key]
 				// Inject the subject (with its already-fetched children) into the sibling list,
@@ -531,7 +546,7 @@ func parentKeyForChild(raw IssueRaw, parentKeySet map[string]bool, strategy stri
 func fetchChildrenForParents(
 	ctx context.Context, c *Client,
 	parentKeys []string, strategy string, hf HierarchyFieldIDs, portfolioFieldName string,
-	childFields []string, fetchAll bool, since string,
+	childFields []string, fetchAll bool, since string, filterClause string,
 ) (map[string][]HierarchyNode, int, error) {
 	const maxBatch = 90
 	const minBatch = 10
@@ -573,7 +588,7 @@ func fetchChildrenForParents(
 		if base == "" {
 			return ""
 		}
-		return base + sinceClause
+		return base + sinceClause + filterClause
 	}
 
 	// searchRaw issues jql and returns raw issues, with 400-retry halving down to minBatch.
@@ -652,7 +667,7 @@ func fetchChildrenForParents(
 
 		// epicLinkClassic: if no results, try parentNextGen fallback.
 		if strategy == "epicLinkClassic" && len(raws) == 0 {
-			fallbackJQL := `parent in (` + strings.Join(batch, ",") + `)` + sinceClause
+			fallbackJQL := `parent in (` + strings.Join(batch, ",") + `)` + sinceClause + filterClause
 			if raws2, total2, err2 := func() ([]IssueRaw, int, error) {
 				var r []IssueRaw
 				var t int

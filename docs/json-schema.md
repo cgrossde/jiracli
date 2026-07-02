@@ -371,6 +371,7 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 ```
 
 **Field notes:**
+- Filtering: `--open`/`--exclude-done`/`--state` are applied **server-side** (the status-category predicate is added to the children/sibling/descendant JQL, like `--since`), so `children`/`siblings` carry only matching nodes and `childrenTotal`/`siblingsTotal` are the filtered counts. `--json` honors these filters and the 100-result cap — it does **not** imply `--all`. When more matching children exist, `childrenTruncated` is `true`; combine with `--all` to fetch everything.
 - `ancestors`: array of nodes, root-first (Initiative at index 0, Epic at index N-1). Empty array `[]` when the subject has no ancestors.
 - `subject`: the issue passed as the argument. Always has `"isSubject": true`.
 - `children`: up to 100 nodes at depth=1. For Epics: issues where `Epic Link = KEY`. For portfolio-level types: issues where `"<portfolioFieldName>" = KEY`. Otherwise: subtasks inline from the subject's response (no extra API call). With `--depth N` (N ≥ 2), each child node may carry a nested `"children"` array of its own — the field is `omitempty` so depth-1 output is byte-for-byte identical to today's (no `children` keys on level-1 nodes).

@@ -857,7 +857,7 @@ Requires hierarchy field IDs to be configured for the profile — run `jiracli s
 
 | Flag | Description |
 |---|---|
-| `--json` | NDJSON output (one object: the full chain) |
+| `--json` | NDJSON output (one object: the full chain). Honors the filters below and the 100-result cap (`childrenTruncated`/`childrenTotal` report truncation); combine with `--all` to fetch everything |
 | `--profile <name>` | Credential profile |
 | `--depth N` | Levels of descendants to fetch (default 1 = direct children; max 5) |
 | `--exclude-done` | Hide children in the Done status category |
@@ -867,7 +867,7 @@ Requires hierarchy field IDs to be configured for the profile — run `jiracli s
 | `--flat` | Flat TSV output: one row per node (`depth`, `key`, `type`, `status`, `assignee`, `summary`). With `--json` emits NDJSON flat mode. |
 | `--since <date>` | Only include issues updated on or after this date (`-2w`, `-1d`, `2024-01-01`). Bare durations (`2w`) have `-` prepended. |
 
-The `--exclude-done` / `--open` / `--state` filter vocabulary is shared with `jiracli search` and `jiracli effort`.
+The `--exclude-done` / `--open` / `--state` filter vocabulary is shared with `jiracli search` and `jiracli effort`. Filtering is applied **server-side** (the status-category predicate is added to the children/sibling/descendant JQL, exactly like `--since`), so `childrenTotal`, `siblingsTotal`, and the truncation flags already reflect the filtered set — and every output mode (plain text, `--flat`, `--json`, `--flat --json`) reports identical results. Inline sub-tasks, which arrive embedded with the subject and are never paginated, are filtered client-side. The subject itself is always shown, even when the active filter would exclude it.
 
 ### Walk behaviour
 
@@ -899,16 +899,7 @@ With `--depth 2` on an Initiative, the output shows each Epic and, indented bene
 [exit:0 | Xms]
 ```
 
-When combined with a filter (`--open`, `--exclude-done`, or `--state`), hidden-count footers accumulate across all levels and name the active filter:
-```
-   (3 hidden by --open filter, 12 across all levels)
-```
-
-Each Epic whose children are all filtered out shows a `(no matching children)` placeholder:
-```
-  ├─ ACME-100       [Epic]   In Progress    Jane Smith              Fix login redirect
-  │  └─ (no matching children)
-```
+When combined with a filter (`--open`, `--exclude-done`, or `--state`), the filter is applied server-side, so Done nodes are simply absent from the tree at every level and the truncation counts reflect the filtered set. There is no "hidden by filter" footer — the tree shows exactly what matched.
 
 ### `--flat` — tabular output
 
@@ -1023,6 +1014,7 @@ When `--depth >= 2` and any level-2+ batch hit the 100-result cap without `--all
 In JSON mode, `"descendantsTruncated": true` is set on the root object.
 
 Field notes:
+- Filtering (`--open`/`--exclude-done`/`--state`) applies to `--json` identically to plain text: the status predicate is pushed into the JQL, so `children`/`siblings` contain only matching nodes and `childrenTotal`/`siblingsTotal` are the filtered server-side counts. `--json` respects the 100-result cap (it does **not** imply `--all`); when more matching children exist, `childrenTruncated` is `true` and `childrenTotal` exceeds `len(children)` — combine with `--all` to fetch the rest.
 - `descendantsTruncated`: `true` when `--depth >= 2` and any subtree hit the 100-result cap without `--all`.
 - `siblings`: array of sibling nodes (co-children of the nearest ancestor), including the subject with `"isSubject": true`. Omitted (`omitempty`) when the subject has no parent (root issue). Sorted: non-Done first, subject first within its done-group. Capped at 100 by default; use `--all` to fetch all.
 - `siblingsTotal`: total server-side sibling count. May exceed `len(siblings)` when capped. Omitted when zero.

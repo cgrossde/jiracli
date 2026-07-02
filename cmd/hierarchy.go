@@ -65,7 +65,7 @@ Use --since to show only issues updated within a relative period (e.g. -2w, -1d,
 		},
 	}
 	c.Flags().StringVar(&flags.Profile, "profile", "", "Profile name")
-	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON (one object: the full chain)")
+	c.Flags().BoolVar(&flags.JSON, "json", false, "Output NDJSON (one object: the full chain). Honors --exclude-done/--open/--state and the 100-result cap (childrenTruncated/childrenTotal report truncation); combine with --all to fetch everything")
 	c.Flags().BoolVar(&flags.All, "all", false, "Fetch all children (bypasses the 100-result default cap)")
 	c.Flags().BoolVar(&flags.ExcludeDone, "exclude-done", false, "Hide children in the Done status category")
 	c.Flags().BoolVar(&flags.Open, "open", false, "Show only non-Done children (alias for --exclude-done)")
@@ -110,7 +110,7 @@ func Hierarchy(ctx context.Context, flags HierarchyFlags, ref string) (string, e
 	// Normalise --since: strip a leading '-' if user wrote e.g. "2w" meaning "-2w".
 	since := normaliseSince(flags.Since)
 
-	chain, err := jira.BuildHierarchy(ctx, client, hf, entry.Hierarchy.PortfolioFieldName, parsed.Key, flags.All || flags.JSON, flags.Depth, since)
+	chain, err := jira.BuildHierarchy(ctx, client, hf, entry.Hierarchy.PortfolioFieldName, parsed.Key, flags.All, flags.Depth, since, filter)
 	if err != nil {
 		return "", fmt.Errorf("walking hierarchy from %s: %w", parsed.Key, err)
 	}
@@ -149,9 +149,9 @@ func Hierarchy(ctx context.Context, flags HierarchyFlags, ref string) (string, e
 	}
 
 	if flags.Flat {
-		return jira.RenderHierarchyFlat(chain, filter), nil
+		return jira.RenderHierarchyFlat(chain), nil
 	}
-	return jira.RenderHierarchy(chain, jira.ColorsEnabled(), filter), nil
+	return jira.RenderHierarchy(chain, jira.ColorsEnabled()), nil
 }
 
 // normaliseSince ensures the value is in a form Jira accepts for the updated >= predicate.
