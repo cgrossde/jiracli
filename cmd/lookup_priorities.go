@@ -77,7 +77,7 @@ func lookupPriorities(ctx context.Context, flags lookupPrioritiesFlags) (string,
 		if fallbackUsed {
 			note := struct {
 				Note string `json:"note"`
-			}{"no per-project priority scheme — showing global list"}
+			}{"per-project priority scheme unavailable or not accessible — showing global list"}
 			data, _ := json.Marshal(note)
 			sb.Write(data)
 			sb.WriteByte('\n')
@@ -94,7 +94,7 @@ func lookupPriorities(ctx context.Context, flags lookupPrioritiesFlags) (string,
 		sb.WriteString("no priorities found\n")
 	}
 	if fallbackUsed {
-		sb.WriteString("\n(note: no per-project priority scheme — showing global list)\n")
+		sb.WriteString("\n(note: per-project priority scheme unavailable or not accessible — showing global list)\n")
 	}
 	return sb.String(), nil
 }

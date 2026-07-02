@@ -159,7 +159,10 @@ func (c *Client) GetCreateMeta(ctx context.Context, projectKey, typeID string, s
 
 // ListProjectPriorities resolves the priority scheme for a project (DC 7.7+)
 // and returns its priorities. Falls back to the global priority list when the
-// priority-scheme endpoint returns 404.
+// priority-scheme endpoint returns 404 (feature/endpoint not available) or 403
+// (caller lacks "Administer Projects" — the priority-scheme endpoint requires
+// project admin, which most regular contributors don't have; global priorities
+// are a reasonable substitute rather than a hard failure).
 // Cache key: "project/<KEY>/priorityscheme", TTL: 24h.
 // Returns (priorities, fallbackUsed, error).
 func (c *Client) ListProjectPriorities(ctx context.Context, projectKey string, store *cache.Store, noCache bool) ([]Priority, bool, error) {
@@ -176,8 +179,10 @@ func (c *Client) ListProjectPriorities(ctx context.Context, projectKey string, s
 	if err != nil {
 		return nil, false, err
 	}
-	if schemeStatus == 404 {
-		// DC version too old or feature not enabled — fall back to global list.
+	if schemeStatus == 404 || schemeStatus == 403 {
+		// 404: DC version too old or feature not enabled.
+		// 403: caller lacks project-admin rights to view the scheme.
+		// Either way, fall back to the global list rather than hard-failing.
 		priorities, err := c.ListPriorities(ctx, store, noCache)
 		return priorities, true, err
 	}
@@ -197,8 +202,8 @@ func (c *Client) ListProjectPriorities(ctx context.Context, projectKey string, s
 	if err != nil {
 		return nil, false, err
 	}
-	if priStatus == 404 {
-		// Scheme found but priorities endpoint unavailable — fall back.
+	if priStatus == 404 || priStatus == 403 {
+		// Scheme found but priorities endpoint unavailable or forbidden — fall back.
 		priorities, err := c.ListPriorities(ctx, store, noCache)
 		return priorities, true, err
 	}

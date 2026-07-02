@@ -335,11 +335,11 @@ Lists priorities — global or per-project priority scheme.
 | `--json` | NDJSON output |
 
 Without `--project`: calls `GET /priority` (global list).
-With `--project`: resolves via `/project/<KEY>/priorityscheme` → `/priorityscheme/{id}/priorities`. On 404 from the scheme endpoint (DC < 7.7 or feature not enabled): falls back to the global list and appends:
+With `--project`: resolves via `/project/<KEY>/priorityscheme` → `/priorityscheme/{id}/priorities`. On 404 from either endpoint (DC < 7.7 or feature not enabled) or 403 (caller lacks "Administer Projects" — the priority-scheme endpoint requires project admin, unlike most other lookups): falls back to the global list and appends:
 
-    (note: no per-project priority scheme — showing global list)
+    (note: per-project priority scheme unavailable or not accessible — showing global list)
 
-In `--json` mode the fallback is signalled by a trailing `{"note":"no per-project priority scheme — showing global list"}` record.
+In `--json` mode the fallback is signalled by a trailing `{"note":"per-project priority scheme unavailable or not accessible — showing global list"}` record.
 
 ### Plain-text output shape
 
