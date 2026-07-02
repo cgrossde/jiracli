@@ -23,6 +23,8 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - completions/*
 
 release:
   github:
@@ -44,11 +46,10 @@ homebrew_casks:
     homepage: "https://github.com/cgrossde/jiracli"
     description: "Easy, agent-friendly & scriptable Jira access"
     license: "MIT"
-    generate_completions_from_executable:
-      executable: "bin/jiracli"
-      args:
-        - completion
-      shell_parameter_format: cobra
+    completions:
+      bash: completions/jiracli.bash
+      zsh: completions/jiracli.zsh
+      fish: completions/jiracli.fish
     hooks:
       post:
         install: |
