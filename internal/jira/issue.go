@@ -52,6 +52,7 @@ type IssueRaw struct {
 		} `json:"reporter"`
 		Created    string   `json:"created"`
 		Updated    string   `json:"updated"`
+		Duedate    string   `json:"duedate"`
 		Labels     []string `json:"labels"`
 		Components []struct {
 			Name string `json:"name"`
@@ -342,6 +343,7 @@ type IssueRecord struct {
 	Reporter         *IssueUserRef       `json:"reporter"`
 	Created          string              `json:"created"`
 	Updated          string              `json:"updated"`
+	DueDate          string              `json:"dueDate,omitempty"`
 	Description      string              `json:"description"`
 	Labels           []string            `json:"labels"`
 	Components       []string            `json:"components"`
@@ -361,6 +363,19 @@ type IssueRecord struct {
 	TimeTracking     *TimeTrackingRecord `json:"timetracking,omitempty"`
 	StoryPoints      *float64            `json:"storyPoints,omitempty"`
 	Sprints          []SprintRef         `json:"sprints,omitempty"`
+	ExtraFields      []FieldValue        `json:"extraFields,omitempty"`
+	UnknownFields    []string            `json:"unknownFields,omitempty"`
+}
+
+// FieldValue is a generic (field id/name, label, display value) triple used
+// to render fields requested via --fields/--fields-only that don't have a
+// dedicated struct field or renderer — e.g. built-in fields like
+// "environment" or any "customfield_NNNNN". Values are formatted the same
+// way 'jiracli search' formats extra columns (durations, names, etc.).
+type FieldValue struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // HierarchyFieldIDs names the instance-specific custom field IDs used by
@@ -438,6 +453,7 @@ func ToIssueRecord(raw IssueRaw, previewN int, hf HierarchyFieldIDs) IssueRecord
 		IssueType:      f.IssueType.Name,
 		Created:        f.Created,
 		Updated:        f.Updated,
+		DueDate:        f.Duedate,
 		Description:    f.Description,
 	}
 

@@ -21,6 +21,8 @@ Keep all documentation in sync with the current source. The targets are:
 | `CODING-INSTRUCTIONS.md` | Go style, error handling, testing rules — developer conventions |
 | `ARCHITECTURE.md` | Two-layer model, output modes, per-command JSON schemas, design constraints |
 | `docs/reads.md` | `show`, `search`, `open`, `auth status` — read-only commands: flags, output format, JSON schema |
+| `docs/hierarchy.md` | `hierarchy` — dedicated page: flags, walk behaviour, `--depth`/`--flat`/`--since`, output format, JSON schema |
+| `docs/effort.md` | `effort` — dedicated page: hierarchy/jql/sprint modes, flags, `--group-by`, output format, JSON schema |
 | `docs/writes.md` | `create`, `edit`, `add` — mutation commands: flags, dry-run behaviour, JSON schema |
 | `docs/lookup-cache.md` | `lookup` and `cache` subcommands: flags, output format, JSON schema |
 | `docs/setup-auth.md` | `setup`, `auth login/reauth/logout/profile` — credential management |
@@ -58,8 +60,9 @@ Adjust the depth if the branch is newer. Map changed source files to affected do
 | `cmd/search.go` | `docs/reads.md`, `CLAUDE.md` |
 | `cmd/open.go` | `docs/reads.md`, `CLAUDE.md` |
 | `cmd/me.go` (auth status) | `docs/reads.md`, `docs/setup-auth.md`, `CLAUDE.md` |
-| `cmd/show_hierarchy.go` | `docs/reads.md`, `docs/json-schema.md`, `CLAUDE.md` |
-| `internal/jira/hierarchy.go`, `internal/jira/hierarchy_render.go` | `docs/reads.md`, `docs/json-schema.md`, `ARCHITECTURE.md` |
+| `cmd/show_hierarchy.go` | `docs/hierarchy.md`, `docs/json-schema.md`, `CLAUDE.md` |
+| `internal/jira/hierarchy.go`, `internal/jira/hierarchy_render.go` | `docs/hierarchy.md`, `docs/json-schema.md`, `ARCHITECTURE.md` |
+| `cmd/effort*.go` | `docs/effort.md`, `docs/json-schema.md`, `CLAUDE.md` |
 | `cmd/create.go`, `cmd/edit.go`, `cmd/field.go`, `cmd/assign.go`, `cmd/transition.go`, `cmd/add.go`, `cmd/comment.go`, `cmd/link.go`, `cmd/attach.go` | `docs/writes.md`, `CLAUDE.md` |
 | `cmd/lookup.go`, `cmd/lookup_*.go` | `docs/lookup-cache.md`, `CLAUDE.md` |
 | `cmd/cache.go` | `docs/lookup-cache.md`, `CLAUDE.md` |
@@ -151,7 +154,7 @@ Update only when:
 
 ### `docs/reads.md`
 
-Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show transitions`, `show attachments`, `hierarchy`, `effort`, `search`, `open`, `auth status`.
+Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show transitions`, `show attachments`, `search`, `open`, `auth status`. `hierarchy` and `effort` have their own dedicated pages — see below.
 
 **Flags section** — one row per flag in a Markdown table:
 ```
@@ -163,6 +166,14 @@ Covers: `show <ref>`, `show assigned`, `show comments`, `show history`, `show tr
 **Output format** — show a realistic rendered example. Use fictional values (`ACME-123`, `In Progress`, `Jane Smith`), not `<placeholder>`.
 
 **JSON schema table** — columns: `Field | Type | Notes`. Notes explain semantics, not Go types. Fields marked `omitempty` in source: "omitted when zero/empty".
+
+### `docs/hierarchy.md`
+
+Covers: `hierarchy <KEY>` only. Same flags/output-format/JSON-schema conventions as `docs/reads.md` above. Cross-link to `docs/effort.md` where relevant (they share the `--exclude-done`/`--open`/`--state` filter vocabulary).
+
+### `docs/effort.md`
+
+Covers: `effort <KEY>` (hierarchy mode), `effort jql <query>`, `effort sprint <id>`. Same flags/output-format/JSON-schema conventions as `docs/reads.md` above. Cross-link to `docs/hierarchy.md` for per-child breakdowns.
 
 ### `docs/writes.md`
 

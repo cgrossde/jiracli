@@ -131,6 +131,21 @@ jiracli search "project = PROJ AND issuetype = Bug" --state done
 
 The effective JQL is echoed on the first line. The default filter excludes `Done` issues — pass `--include-done` to lift it.
 
+### Hierarchy & effort
+
+```sh
+jiracli hierarchy PROJ-123                # where does this sit? (Story → Epic → Initiative)
+jiracli hierarchy PROJ-50 --depth 2       # everything under an Initiative/Epic, two levels deep
+jiracli hierarchy PROJ-50 --flat          # tabular output instead of a tree
+
+jiracli effort PROJ-50                    # roll up planned/remaining/spent time + story points across children
+jiracli effort PROJ-50 --list             # + a per-child table (how much was logged on each Epic)
+jiracli effort jql 'sprint = 2001' --group-by assignee
+jiracli effort sprint 2001 --group-by status
+```
+
+`hierarchy` walks an issue both up the parent chain and down through its descendants; `effort` aggregates time and Story Points over the same children (or over an arbitrary JQL/sprint result set). See [`docs/hierarchy.md`](docs/hierarchy.md) and [`docs/effort.md`](docs/effort.md).
+
 ### Writing (dry-run by default)
 
 ```sh
@@ -139,7 +154,7 @@ jiracli edit status   PROJ-123 "In Review"
 jiracli edit assignee PROJ-123 me
 jiracli edit field    PROJ-123 "priority=High" "labels+=regression"
 jiracli add comment   PROJ-123 "Reproduced on v10.5, not v10.6."
-jiracli add link      PROJ-123 PROJ-456 --type Blocks
+jiracli add link      PROJ-123 PROJ-456 --type Required
 
 # Apply
 jiracli edit status PROJ-123 "In Review" --yes
@@ -168,6 +183,7 @@ Apply with: re-run with --yes
 ```sh
 # Inline
 jiracli create --project PROJ --type Bug --summary "Login fails on iOS" --assignee me --yes
+jiracli create --project PROJ --type Story --summary "Add OAuth flow" --epic PROJ-100 --yes
 
 # Draft workflow (recommended for complex issues)
 jiracli create --init-draft new-issue.yaml   # writes a YAML template
@@ -243,6 +259,8 @@ jiracli auth profile --list
 |---|---|
 | Setup & auth | [`docs/setup-auth.md`](docs/setup-auth.md) |
 | Read commands (`show`, `search`) | [`docs/reads.md`](docs/reads.md) |
+| Hierarchy (`hierarchy`) | [`docs/hierarchy.md`](docs/hierarchy.md) |
+| Effort rollup (`effort`) | [`docs/effort.md`](docs/effort.md) |
 | Write commands (`edit`, `add`, `create`) | [`docs/writes.md`](docs/writes.md) |
 | Delete commands | [`docs/delete.md`](docs/delete.md) |
 | Lookup commands | [`docs/lookup.md`](docs/lookup.md) |

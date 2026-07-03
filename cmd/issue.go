@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +46,9 @@ Fields reference (--fields / --fields-only):
   Standard names: reporter, assignee, description, labels, components,
                   fixVersions, resolution, duedate, created, updated,
                   timeestimate, timeoriginalestimate, timespent
-  Any Jira field ID is also accepted (e.g. customfield_10031).
+  Any Jira field ID is also accepted (e.g. customfield_10031), including
+  built-in fields with no dedicated section (e.g. environment) — these
+  render generically as "Label: value" using the field's own display name.
   Use jiracli lookup fields to list all available field IDs.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -109,15 +112,18 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 
 	fields := jira.DefaultIssueFields
 	var fieldSet map[string]bool // nil = full default set; non-nil only with --fields-only
+	var unknownFields []string   // typo'd/garbage field names from --fields or --fields-only
 	if flags.FieldsOnly != "" {
 		fields = flags.FieldsOnly
 		fieldSet = make(map[string]bool)
 		for _, f := range strings.Split(flags.FieldsOnly, ",") {
 			fieldSet[strings.TrimSpace(f)] = true
 		}
+		unknownFields = unknownFieldTokens(ctx, client, store, jira.DefaultIssueFields, flags.FieldsOnly)
 	} else {
 		if flags.Fields != "" {
 			fields = resolveFieldList(jira.DefaultIssueFields, flags.Fields)
+			unknownFields = unknownFieldTokens(ctx, client, store, jira.DefaultIssueFields, flags.Fields)
 		}
 		// Append hierarchy custom-field IDs (per-profile) so Epic/Portfolio/StoryPoints/Sprint populate.
 		for _, fid := range []string{
@@ -154,6 +160,8 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		SprintField: entry.Agile.SprintField,
 	}
 	rec := jira.ToIssueRecord(raw, commentsN, hf)
+	rec.UnknownFields = unknownFields
+	rec.ExtraFields = collectExtraFields(raw, fields, hf)
 
 	// All four enrichment calls are independent — run them concurrently.
 	// Each goroutine writes a disjoint field of rec; WaitGroup provides the barrier.
@@ -235,7 +243,106 @@ func Issue(ctx context.Context, flags IssueFlags, ref string) (string, error) {
 		return string(data) + "\n", nil
 	}
 
-	return renderIssue(rec, flags, fieldSet, entry.Hierarchy.StoryPointsField), nil
+	output := renderIssue(rec, flags, fieldSet, entry.Hierarchy.StoryPointsField)
+	if len(unknownFields) > 0 {
+		output += unknownFieldsWarning(unknownFields)
+	}
+	return output, nil
+}
+
+// unknownFieldsWarning formats a corrective note for --fields/--fields-only
+// tokens that matched neither a default field, a raw customfield_NNN id, nor
+// a name/id resolvable via jiracli lookup fields. Without this, a typo'd or
+// garbage field name is silently omitted from the request with no feedback.
+func unknownFieldsWarning(unknownFields []string) string {
+	quoted := make([]string, len(unknownFields))
+	for i, f := range unknownFields {
+		quoted[i] = strconv.Quote(f)
+	}
+	plural := ""
+	if len(unknownFields) > 1 {
+		plural = "s"
+	}
+	return fmt.Sprintf("\n⚠ unknown field%s ignored: %s — not a Jira field name or ID; run: jiracli lookup fields\n",
+		plural, strings.Join(quoted, ", "))
+}
+
+// isCustomFieldID reports whether name looks like a raw Jira custom field id
+// (customfield_NNNN). Such ids are always accepted without a round-trip to
+// the fields API, since they're the canonical form returned by the API itself.
+func isCustomFieldID(name string) bool {
+	const prefix = "customfield_"
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	digits := name[len(prefix):]
+	if digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// unknownFieldTokens scans a --fields or --fields-only spec (comma-separated,
+// "+name" / "-name" / "name" tokens) and returns the distinct token names that
+// match neither a default field, a raw customfield_NNN id, nor a field known
+// to the Jira instance (by id or display name, case-insensitive). If the
+// fields API can't be reached, validation fails open (returns nil) rather
+// than producing false-positive warnings.
+func unknownFieldTokens(ctx context.Context, client *jira.Client, store *cache.Store, defaultFields, spec string) []string {
+	known := make(map[string]bool)
+	for _, f := range strings.Split(defaultFields, ",") {
+		known[strings.ToLower(strings.TrimSpace(f))] = true
+	}
+	known["key"] = true    // pseudo-field always present; not listed by /field
+	known["sprint"] = true // documented alias; the Sprint field is auto-appended by key, not by this literal name
+
+	candidates := make([]string, 0, 4)
+	seen := make(map[string]bool)
+	for _, t := range strings.Split(spec, ",") {
+		t = strings.TrimSpace(t)
+		name := strings.TrimPrefix(strings.TrimPrefix(t, "-"), "+")
+		if name == "" {
+			continue
+		}
+		lname := strings.ToLower(name)
+		if seen[lname] {
+			continue
+		}
+		seen[lname] = true
+		if known[lname] || isCustomFieldID(lname) {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	allFields, err := client.ListFields(ctx, store, false)
+	if err != nil {
+		return nil
+	}
+	validIDs := make(map[string]bool, len(allFields))
+	validNames := make(map[string]bool, len(allFields))
+	for _, f := range allFields {
+		validIDs[strings.ToLower(f.ID)] = true
+		validNames[strings.ToLower(f.Name)] = true
+	}
+
+	var unknown []string
+	for _, name := range candidates {
+		lname := strings.ToLower(name)
+		if validIDs[lname] || validNames[lname] {
+			continue
+		}
+		unknown = append(unknown, name)
+	}
+	return unknown
 }
 
 // resolveParentKey fetches the minimal fields of key and returns the parent key
@@ -318,6 +425,47 @@ func resolveFieldList(defaultFields, spec string) string {
 		}
 	}
 	return strings.Join(set, ",")
+}
+
+// knownIssueFields are field ids/names that already have dedicated struct
+// fields and rendering in renderIssue (or feed a separate section, e.g.
+// comment/attachment/issuelinks). Anything else requested via --fields or
+// --fields-only falls through to collectExtraFields.
+var knownIssueFields = map[string]bool{
+	"key": true, "summary": true, "status": true, "assignee": true,
+	"reporter": true, "description": true, "labels": true, "components": true,
+	"priority": true, "issuetype": true, "created": true, "updated": true,
+	"comment": true, "fixVersions": true, "parent": true, "issuelinks": true,
+	"attachment": true, "resolution": true, "timetracking": true, "duedate": true,
+}
+
+// collectExtraFields renders any requested field id/name that isn't already
+// covered by a dedicated struct field/section, using the same generic
+// label/value logic 'jiracli search' uses for its extra columns (handles
+// durations, plain strings, and name/displayName/value objects). Without
+// this, a field like "environment" or a custom field was silently fetched
+// and then dropped — accepted by --fields, but never rendered anywhere.
+func collectExtraFields(raw jira.IssueRaw, fields string, hf jira.HierarchyFieldIDs) []jira.FieldValue {
+	skip := map[string]bool{
+		hf.EpicLink:    true,
+		hf.ParentLink:  true,
+		hf.Portfolio:   true,
+		hf.StoryPoints: true,
+		hf.SprintField: true,
+	}
+	var extra []jira.FieldValue
+	for _, f := range strings.Split(fields, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" || knownIssueFields[f] || skip[f] {
+			continue
+		}
+		v := extractFieldValue(raw, f, "")
+		if v == "" {
+			continue
+		}
+		extra = append(extra, jira.FieldValue{ID: f, Label: fieldLabel(f, ""), Value: v})
+	}
+	return extra
 }
 
 // parseISODate parses an ISO8601/RFC3339 datetime string and returns "YYYY-MM-DD".
@@ -404,7 +552,7 @@ func fieldIn(fieldSet map[string]bool, name string) bool {
 func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]bool, spField string) string {
 	var sb strings.Builder
 
-	// Header line: type-badge  KEY  status-badge · priority
+	// Header line: type-badge  KEY  status-badge · Prio: priority · Resolution: x
 	priority := rec.Priority
 	if priority == "" {
 		priority = "—"
@@ -412,56 +560,83 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	typeBadge := colorIssueType(rec.IssueType)
 	statusBadge := colorStatusName(rec.Status)
 	clr := colorsEnabled()
+	var header string
 	if clr {
-		fmt.Fprintf(&sb, "%s  %s  %s · %s\n",
-			typeBadge,
-			jira.Bold(rec.Key, true),
-			statusBadge,
-			colorPriority(priority))
+		header = fmt.Sprintf("%s  %s  %s · %s %s",
+			typeBadge, jira.Bold(rec.Key, true), statusBadge, sectionLabel("Prio:"), colorPriority(priority))
 	} else {
-		fmt.Fprintf(&sb, "%s  %s  %s · %s\n", typeBadge, rec.Key, rec.Status, priority)
+		header = fmt.Sprintf("%s  %s  %s · Prio: %s", typeBadge, rec.Key, rec.Status, priority)
 	}
+	if rec.Resolution != nil && *rec.Resolution != "" {
+		header += fmt.Sprintf(" · %s %s", sectionLabel("Resolution:"), *rec.Resolution)
+	}
+	sb.WriteString(header)
+	sb.WriteByte('\n')
 	fmt.Fprintf(&sb, "%s\n", jira.BoldFgW(rec.Summary, clr))
 	sb.WriteByte('\n')
+
+	// Fixed-width label/value columns keep the metadata block below aligned
+	// across every row (padding happens before ANSI wrapping so visible
+	// width is correct). Width 13 fits the longest label, "Fix Version:".
+	const labelWidth = 13
+	const valueWidth = 28
+	padLabel := func(s string) string { return sectionLabel(fmt.Sprintf("%-*s", labelWidth, s)) }
 
 	// People & dates — only show when those fields were fetched.
 	showAssignee := fieldIn(fieldSet, "assignee")
 	showReporter := fieldIn(fieldSet, "reporter")
 	showDates := fieldIn(fieldSet, "created") || fieldIn(fieldSet, "updated")
-	if showAssignee || showReporter || showDates {
+	showFixVersions := len(rec.FixVersions) > 0
+	showDue := rec.DueDate != ""
+	showComponents := len(rec.Components) > 0
+	showLabels := len(rec.Labels) > 0
+	if showAssignee || showReporter || showDates || showFixVersions || showDue || showComponents || showLabels {
 		if showAssignee || showReporter {
 			assignee := "(unassigned)"
 			if rec.Assignee != nil {
-				assignee = fmt.Sprintf("%s (%s)", rec.Assignee.DisplayName, rec.Assignee.Name)
+				assignee = rec.Assignee.DisplayName
 			}
 			reporter := ""
 			if rec.Reporter != nil {
-				reporter = fmt.Sprintf("%s (%s)", rec.Reporter.DisplayName, rec.Reporter.Name)
+				reporter = rec.Reporter.DisplayName
 			}
-			fmt.Fprintf(&sb, "%s %-30s %s %s\n",
-				sectionLabel("Assignee:"), assignee,
-				sectionLabel("Reporter:"), reporter)
+			fmt.Fprintf(&sb, "%s %-*s %s %s\n",
+				padLabel("Assignee:"), valueWidth, assignee,
+				padLabel("Reporter:"), reporter)
 		}
 		if showDates {
 			createdDate := dateWithAge(rec.Created)
 			updatedDate := dateWithAge(rec.Updated)
-			fmt.Fprintf(&sb, "%s %-32s %s %s\n",
-				sectionLabel("Created:"), createdDate,
-				sectionLabel("Updated:"), updatedDate)
+			fmt.Fprintf(&sb, "%s %-*s %s %s\n",
+				padLabel("Created:"), valueWidth, createdDate,
+				padLabel("Updated:"), updatedDate)
 		}
-		sb.WriteByte('\n')
-	}
-
-	// Components, Labels, Fix Versions — displayed right after the dates block.
-	if len(rec.Components) > 0 || len(rec.Labels) > 0 || len(rec.FixVersions) > 0 {
-		if len(rec.Components) > 0 {
-			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Components:"), strings.Join(rec.Components, ", "))
+		switch {
+		case showFixVersions && showDue:
+			fmt.Fprintf(&sb, "%s %-*s %s %s\n",
+				padLabel("Fix Version:"), valueWidth, strings.Join(rec.FixVersions, ", "),
+				padLabel("Due:"), rec.DueDate)
+		case showFixVersions:
+			fmt.Fprintf(&sb, "%s %s\n", padLabel("Fix Version:"), strings.Join(rec.FixVersions, ", "))
+		case showDue:
+			fmt.Fprintf(&sb, "%s %s\n", padLabel("Due:"), rec.DueDate)
 		}
-		if len(rec.Labels) > 0 {
-			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Labels:"), strings.Join(rec.Labels, ", "))
-		}
-		if len(rec.FixVersions) > 0 {
-			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Fix Versions:"), strings.Join(rec.FixVersions, ", "))
+		// Components / Labels — two columns when Components fits the value
+		// column; otherwise each gets its own full-width line.
+		components := strings.Join(rec.Components, ", ")
+		labels := strings.Join(rec.Labels, ", ")
+		switch {
+		case showComponents && showLabels && len(components) <= valueWidth:
+			fmt.Fprintf(&sb, "%s %-*s %s %s\n",
+				padLabel("Components:"), valueWidth, components,
+				padLabel("Labels:"), labels)
+		default:
+			if showComponents {
+				fmt.Fprintf(&sb, "%s %s\n", padLabel("Components:"), components)
+			}
+			if showLabels {
+				fmt.Fprintf(&sb, "%s %s\n", padLabel("Labels:"), labels)
+			}
 		}
 		sb.WriteByte('\n')
 	}
@@ -482,11 +657,11 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 			parts = append(parts, "Spent "+jira.FormatSeconds(tt.TimeSpentSeconds))
 		}
 		if len(parts) > 0 {
-			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Estimates:"), strings.Join(parts, " · "))
-		}
-		if tt.OriginalEstimateSeconds > 0 {
-			bar := jira.FormatProgressBar(tt.TimeSpentSeconds, tt.OriginalEstimateSeconds, 24, clr)
-			fmt.Fprintf(&sb, "%s\n", bar)
+			line := strings.Join(parts, " · ")
+			if tt.OriginalEstimateSeconds > 0 {
+				line += "  " + jira.FormatProgressBar(tt.TimeSpentSeconds, tt.OriginalEstimateSeconds, 24, clr)
+			}
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Estimates:"), line)
 		}
 	}
 	if showSP && rec.StoryPoints != nil {
@@ -548,6 +723,16 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		sb.WriteByte('\n')
 	}
 
+	// Other fields — anything requested via --fields/--fields-only that
+	// doesn't have a dedicated section above (built-in fields like
+	// "environment", or any customfield_NNNNN).
+	if len(rec.ExtraFields) > 0 {
+		for _, fv := range rec.ExtraFields {
+			fmt.Fprintf(&sb, "%s %s\n", sectionLabel(fv.Label+":"), fv.Value)
+		}
+		sb.WriteByte('\n')
+	}
+
 	// Description
 	if rec.Description != "" {
 		sb.WriteString(sectionLabel("Description:") + "\n")
@@ -588,12 +773,6 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 		}
 		fmt.Fprintf(&sb, "  → jiracli delete %s:link:<id>\n", rec.Key)
 		fmt.Fprintf(&sb, "  → jiracli add link %s OTHER-123 --type \"is related to\"\n", rec.Key)
-		sb.WriteByte('\n')
-	}
-
-	// Resolution
-	if rec.Resolution != nil {
-		fmt.Fprintf(&sb, "%s %s\n", sectionLabel("Resolution:"), *rec.Resolution)
 		sb.WriteByte('\n')
 	}
 
@@ -715,9 +894,11 @@ func renderIssue(rec jira.IssueRecord, flags IssueFlags, fieldSet map[string]boo
 	fmt.Fprintf(&sb, "  → jiracli show history      %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli show transitions  %s\n", rec.Key)
 	fmt.Fprintf(&sb, "  → jiracli hierarchy         %s\n", rec.Key)
-	// Advertise `effort` only for issue types that roll up children (Epics and
-	// portfolio-level items); it is meaningless for plain Stories/Bugs/Sub-tasks.
-	if jira.IssueTypeRollsUp(rec.IssueType) {
+	// Advertise `effort` only when it would actually find something to roll
+	// up: portfolio-level items (Initiative/Feature/Program/Theme) always
+	// roll up via the parent-link field, but an Epic is only worth it once
+	// it actually has children — an empty Epic has nothing to aggregate.
+	if jira.IsPortfolioLevel(rec.IssueType) || (jira.IssueTypeRollsUp(rec.IssueType) && rec.ChildrenTotal > 0) {
 		fmt.Fprintf(&sb, "  → jiracli effort            %s   # roll up time & story points across its children\n", rec.Key)
 	}
 

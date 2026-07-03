@@ -12,6 +12,8 @@ Full reference for all commands, flags, output formats, and schemas.
 |---|---|
 | [setup-auth.md](setup-auth.md) | First-time setup, PAT auth, profiles, skill install |
 | [reads.md](reads.md) | `show`, `search`, `assigned`, `comments`, `history`, `transitions`, `attachments`, `open` |
+| [hierarchy.md](hierarchy.md) | `hierarchy` — map an issue up the parent chain and down through descendants |
+| [effort.md](effort.md) | `effort` — roll up time estimates and Story Points across children, a JQL result set, or a sprint |
 | [writes.md](writes.md) | `add comment`, `edit status/assignee/field`, `create`, `add link`, `add attachment` — and the write safety model |
 | [boards-sprints.md](boards-sprints.md) | `board`, `sprint`, `lookup boards`, `edit sprint`, `config agile` — Agile board and sprint commands |
 | [delete.md](delete.md) | `delete comment`, `delete attachment`, `delete link`, `delete issue` |
@@ -32,6 +34,10 @@ jiracli show comments PROJ-123            # comment thread
 jiracli show history  PROJ-123 --since 7d
 jiracli show assigned                     # your open issues
 jiracli search "project = PROJ AND priority = High"
+jiracli hierarchy PROJ-123                # where does this sit? (Story → Epic → Initiative)
+jiracli hierarchy PROJ-50 --depth 2       # everything under an Initiative/Epic
+jiracli effort PROJ-50                    # roll up time + story points across children
+jiracli effort PROJ-50 --list             # + a per-child table (how much was logged on each Epic)
 ```
 
 ### Writing (dry-run by default, `--yes` to apply)

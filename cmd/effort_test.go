@@ -100,8 +100,8 @@ func TestEffort_InvalidRef(t *testing.T) {
 	}
 }
 
-// The effort command drops the per-child --list table; renderRollupTree must
-// point the reader at `jiracli hierarchy` for the breakdown instead.
+// By default (no --list) renderRollupTree only prints the aggregate rows and
+// points the reader at `jiracli hierarchy` for the structural breakdown.
 func TestRenderRollupTree_DrillHint(t *testing.T) {
 	raw := makeTestSubject("EPIC-1", "Epic")
 	tree := makeTree("EPIC-1", nil)
@@ -110,7 +110,37 @@ func TestRenderRollupTree_DrillHint(t *testing.T) {
 		t.Errorf("expected hierarchy drill hint, got:\n%s", out)
 	}
 	if strings.Contains(out, "Children:") {
-		t.Errorf("effort must not render a per-child list, got:\n%s", out)
+		t.Errorf("effort must not render a per-child list unless tree.Nodes is populated (--list), got:\n%s", out)
+	}
+}
+
+// When --list populates tree.Nodes, renderRollupTree must print a per-child
+// table with each child's own planned/remaining/spent/SP figures.
+func TestRenderRollupTree_WithList(t *testing.T) {
+	raw := makeTestSubject("INIT-1", "Initiative")
+	sp3 := float64(3)
+	nodes := []jira.RollupNode{
+		{Key: "EPIC-2", Status: "In Progress", Assignee: "Jane Smith",
+			OriginalEstimateSecs: 80 * 3600, RemainingEstimateSecs: 20 * 3600, TimeSpentSecs: 60 * 3600, StoryPoints: &sp3},
+		{Key: "EPIC-1", Status: "Open", OriginalEstimateSecs: 40 * 3600, RemainingEstimateSecs: 40 * 3600},
+	}
+	tree := makeTree("INIT-1", nodes)
+	tree.Nodes = nodes
+
+	out := renderRollupTree(raw, tree, false, 1, false, "")
+
+	if !strings.Contains(out, "Children:") {
+		t.Errorf("expected a Children: breakdown table, got:\n%s", out)
+	}
+	if !strings.Contains(out, "EPIC-1") || !strings.Contains(out, "EPIC-2") {
+		t.Errorf("expected both children listed, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Jane Smith") {
+		t.Errorf("expected assignee in child row, got:\n%s", out)
+	}
+	// EPIC-1 (no assignee) should list before EPIC-2 (sorted by key).
+	if strings.Index(out, "EPIC-1") > strings.Index(out, "EPIC-2") {
+		t.Errorf("expected children sorted by key (EPIC-1 before EPIC-2), got:\n%s", out)
 	}
 }
 

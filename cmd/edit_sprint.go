@@ -16,8 +16,9 @@ import (
 	"github.com/cgrossde/jiracli/internal/keychain"
 )
 
-// editSprintIssueKeyRE matches a canonical Jira issue key.
-var editSprintIssueKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]+-\d+$`)
+// editSprintIssueKeyRE matches a canonical Jira issue key. Case-insensitive —
+// see jira.ParseRef for why key casing is normalized rather than rejected.
+var editSprintIssueKeyRE = regexp.MustCompile(`(?i)^[A-Z][A-Z0-9_]+-\d+$`)
 
 // EditSprintFlags holds flag values for `edit sprint`.
 type EditSprintFlags struct {
@@ -66,11 +67,12 @@ Closed sprints are rejected. Kanban boards cannot resolve "current"/"next".`,
 
 // EditSprint is the Layer 1 implementation.
 func EditSprint(ctx context.Context, flags EditSprintFlags, keys []string, target string) (string, error) {
-	// Validate keys.
-	for _, k := range keys {
+	// Validate and normalize keys (Jira issue keys are case-insensitive).
+	for i, k := range keys {
 		if !editSprintIssueKeyRE.MatchString(k) {
 			return "", fmt.Errorf("not a valid issue key: %q", k)
 		}
+		keys[i] = strings.ToUpper(k)
 	}
 
 	entry, err := resolveEntry(flags.Profile)

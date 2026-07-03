@@ -99,9 +99,14 @@ func TestParseRef(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "lowercase key",
-			input:   "acme-123",
-			wantErr: true,
+			name:  "lowercase key is normalized to uppercase",
+			input: "acme-123",
+			want:  Ref{Key: "ACME-123", Kind: RefIssue},
+		},
+		{
+			name:  "mixed-case key is normalized to uppercase",
+			input: "Acme-123",
+			want:  Ref{Key: "ACME-123", Kind: RefIssue},
 		},
 		{
 			name:    "missing number part",
@@ -149,9 +154,9 @@ func TestParseRef(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "browse URL with invalid key",
-			input:   "https://jira.example.com/browse/acme-123",
-			wantErr: true,
+			name:  "browse URL with lowercase key is normalized to uppercase",
+			input: "https://jira.example.com/browse/acme-123",
+			want:  Ref{Key: "ACME-123", Kind: RefIssue},
 		},
 		{
 			name:    "random string",

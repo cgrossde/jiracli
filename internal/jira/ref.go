@@ -31,9 +31,11 @@ type Ref struct {
 var ErrInvalidRef = errors.New("invalid issue reference")
 
 // issueKeyRE matches a canonical Jira issue key: project prefix, dash, number.
-// The project prefix must start with a letter and may contain uppercase letters,
-// digits, and underscores.
-var issueKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]+-\d+$`)
+// The project prefix must start with a letter and may contain letters, digits,
+// and underscores. Matching is case-insensitive — Jira's own REST/JQL layer
+// normalizes key case, and jiracli mirrors that so a key copy-pasted in
+// lowercase (e.g. from Slack or email) is not rejected.
+var issueKeyRE = regexp.MustCompile(`(?i)^[A-Z][A-Z0-9_]+-\d+$`)
 
 // ParseRef parses an issue reference in any of the forms described in §3:
 //
@@ -44,7 +46,8 @@ var issueKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]+-\d+$`)
 //   - https://host/browse/ACME-123     → RefIssue (query/fragment ignored)
 //
 // The sub-prefixes are matched case-insensitively.
-// The issue key itself is preserved as-is (no case folding).
+// The issue key itself is normalized to uppercase (Jira treats issue keys as
+// case-insensitive, so "mob-51059" and "MOB-51059" refer to the same issue).
 //
 // URL comment anchors (?focusedCommentId=NNN) are intentionally not parsed;
 // use the colon form for comment references.
@@ -82,7 +85,7 @@ func parseURLRef(trimmed, original string) (Ref, error) {
 		return Ref{}, fmt.Errorf("%w: %q — expected ACME-123, ACME-123:comment:NNN, ACME-123:attach:NNN, ACME-123:link:NNN, or a browse URL", ErrInvalidRef, original)
 	}
 
-	return Ref{Key: key, Kind: RefIssue}, nil
+	return Ref{Key: strings.ToUpper(key), Kind: RefIssue}, nil
 }
 
 // parseColonRef handles plain-key and KEY:sub:ID forms.
@@ -93,6 +96,7 @@ func parseColonRef(trimmed, original string) (Ref, error) {
 	if !issueKeyRE.MatchString(key) {
 		return Ref{}, fmt.Errorf("%w: %q — expected ACME-123, ACME-123:comment:NNN, ACME-123:attach:NNN, ACME-123:link:NNN, or a browse URL", ErrInvalidRef, original)
 	}
+	key = strings.ToUpper(key)
 
 	// Plain key — no colon suffix.
 	if len(parts) == 1 {

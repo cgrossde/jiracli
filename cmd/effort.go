@@ -28,6 +28,7 @@ type EffortFlags struct {
 	ExcludeDone bool   // --exclude-done: skip Done-category children
 	State       string // --state: keep only this status category (todo|in-progress|done|all)
 	Since       string // --since: only include children updated on/after this date
+	List        bool   // --list: also print a per-child table (key, status, assignee, planned/remaining/spent/SP)
 }
 
 // NewEffortCmd builds the "effort" command tree:
@@ -65,12 +66,17 @@ Filter which children are counted (shared with 'jiracli hierarchy' and 'jiracli 
 Add --group-by status|statusCategory to replace the per-level breakdown with a
 per-status breakdown of the direct children.
 
+Add --list to also print a per-child table (key, status, assignee, planned,
+remaining, spent, SP) beneath the aggregate rows — useful for seeing exactly
+how much time was logged on each child (e.g. each Epic under an Initiative).
+
 To aggregate over an arbitrary set of issues instead of a hierarchy, use the
 subcommands:
   jiracli effort jql '<query>'    aggregate over a JQL result set
   jiracli effort sprint <id>      aggregate over a sprint
 
-To see the individual children, use 'jiracli hierarchy <KEY>'.`,
+For the structural tree (status/assignee/summary, no time figures), use
+'jiracli hierarchy <KEY>'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := Effort(cmd.Context(), flags, args[0])
@@ -108,6 +114,9 @@ Add --group-by to break the totals down:
   status          — group by status name (e.g. "In Progress", "Pending Review")
   statusCategory  — group by status category (To Do, In Progress, Done)
 
+Add --list to also print a per-issue table (key, status, assignee, planned,
+remaining, spent, SP) beneath the aggregate rows.
+
 The --state / --open / --exclude-done / --since filters from the hierarchy mode
 apply here too.`,
 		Args: cobra.MinimumNArgs(1),
@@ -140,6 +149,9 @@ Add --group-by to break the totals down:
   assignee        — group by person
   status          — group by status name
   statusCategory  — group by status category (To Do, In Progress, Done)
+
+Add --list to also print a per-issue table (key, status, assignee, planned,
+remaining, spent, SP) beneath the aggregate rows.
 
 The --state / --open / --exclude-done / --since filters from the hierarchy mode
 apply here too.`,
@@ -175,6 +187,7 @@ func addEffortSharedFlags(c *cobra.Command, flags *EffortFlags) {
 	c.Flags().BoolVar(&flags.Open, "open", false, "Count only non-Done issues (alias for --exclude-done)")
 	c.Flags().StringVar(&flags.State, "state", "", "Count only issues in this status category: todo, in-progress, done, all")
 	c.Flags().StringVar(&flags.Since, "since", "", "Only count issues updated on or after this date (e.g. -2w, -1d, 2024-01-01)")
+	c.Flags().BoolVar(&flags.List, "list", false, "Also print a per-child table (key, status, assignee, planned/remaining/spent/SP)")
 }
 
 // EffortQuery is the Layer 1 implementation for the flat-aggregation modes
@@ -373,6 +386,12 @@ func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) 
 		if len(l2Nodes) > 0 || l2Total > 0 {
 			levels = append(levels, buildGroupedLevel(l2Nodes, l2Total, l2Truncated, flags.GroupBy, "Level 2"))
 		}
+		if flags.List {
+			levels[0].nodes = l1Nodes
+			if len(levels) > 1 {
+				levels[1].nodes = l2Nodes
+			}
+		}
 
 		if flags.JSON {
 			var out strings.Builder
@@ -383,6 +402,7 @@ func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) 
 					SubjectSummary:   subjectRaw.Fields.Summary,
 					SubjectRow:       jira.SubjectRowFromRaw(subjectRaw, spField),
 					Rows:             lv.rows,
+					Nodes:            lv.nodes,
 					HasDeeperLevel:   hasDeeperLevel,
 					MaxFetchedDepth:  depth,
 					GroupBy:          flags.GroupBy,
@@ -460,6 +480,10 @@ func Effort(ctx context.Context, flags EffortFlags, ref string) (string, error) 
 		}
 		tree.Rows = append(tree.Rows, l2Row)
 		tree.MaxFetchedDepth = 2
+	}
+
+	if flags.List {
+		tree.Nodes = l1Nodes
 	}
 
 	if flags.JSON {
@@ -768,6 +792,9 @@ func effortJQL(ctx context.Context, flags EffortFlags, filter jira.ChildFilter) 
 		MaxFetchedDepth:  1,
 		GroupBy:          flags.GroupBy,
 	}
+	if flags.List {
+		tree.Nodes = nodes
+	}
 	if flags.JSON {
 		data, err := json.Marshal(tree)
 		if err != nil {
@@ -940,6 +967,11 @@ func renderRollupTree(subjectRaw jira.IssueRaw, tree jira.RollupTree, hasDeeperL
 		fmt.Fprintf(&sb, "%s\n\n", bar)
 	}
 
+	// ── Per-child breakdown (--list) ─────────────────────────────────────────
+	if len(tree.Nodes) > 0 {
+		sb.WriteString(renderNodeList(tree.Nodes))
+	}
+
 	// ── Depth hints ──────────────────────────────────────────────────────────
 	if hasDeeperLevel && depth < 2 {
 		fmt.Fprintf(&sb, "  → pass --depth 2 to also aggregate grandchildren\n")
@@ -1054,8 +1086,59 @@ func renderRollupHierarchyGrouped(subjectRaw jira.IssueRaw, levels []groupedLeve
 			bar := jira.FormatProgressBar(total.TimeSpentSecs, total.OriginalEstimateSecs, 24, clr)
 			fmt.Fprintf(&sb, "%s\n\n", bar)
 		}
+
+		// Per-child breakdown (--list).
+		if len(lv.nodes) > 0 {
+			sb.WriteString(renderNodeList(lv.nodes))
+		}
 	}
 
+	return sb.String()
+}
+
+// renderNodeList renders a per-child breakdown table for --list: one row per
+// node with key, status, assignee, and time/SP figures, sorted by key.
+func renderNodeList(nodes []jira.RollupNode) string {
+	if len(nodes) == 0 {
+		return ""
+	}
+	sorted := make([]jira.RollupNode, len(nodes))
+	copy(sorted, nodes)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Key < sorted[j].Key })
+
+	const (
+		keyW      = 12
+		statusW   = 14
+		assigneeW = 20
+		colW      = 10
+	)
+	rule := strings.Repeat("─", keyW+2+statusW+2+assigneeW+2+(colW+2)*3+colW) + "\n"
+
+	var sb strings.Builder
+	sb.WriteString("Children:\n")
+	fmt.Fprintf(&sb, "%-*s  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
+		keyW, "Key", statusW, "Status", assigneeW, "Assignee",
+		colW, "Planned", colW, "Remaining", colW, "Spent", colW, "SP")
+	sb.WriteString(rule)
+	for _, n := range sorted {
+		assignee := n.Assignee
+		if assignee == "" {
+			assignee = "—"
+		}
+		sp := "—"
+		if n.StoryPoints != nil {
+			sp = fmt.Sprintf("%g", *n.StoryPoints)
+		}
+		fmt.Fprintf(&sb, "%-*s  %-*s  %-*s  %*s  %*s  %*s  %*s\n",
+			keyW, jira.TruncateString(n.Key, keyW),
+			statusW, jira.TruncateString(n.Status, statusW),
+			assigneeW, jira.TruncateString(assignee, assigneeW),
+			colW, dashIfZero(n.OriginalEstimateSecs),
+			colW, dashIfZero(n.RemainingEstimateSecs),
+			colW, dashIfZero(n.TimeSpentSecs),
+			colW, sp)
+	}
+	sb.WriteByte('\n')
 	return sb.String()
 }
 
@@ -1165,6 +1248,10 @@ func renderRollupJQL(tree jira.RollupTree) string {
 		}
 	}
 	sb.WriteByte('\n')
+
+	if len(tree.Nodes) > 0 {
+		sb.WriteString(renderNodeList(tree.Nodes))
+	}
 
 	fmt.Fprintf(&sb, "→ jiracli show <KEY>  # to drill into any issue\n")
 	return sb.String()

@@ -116,6 +116,16 @@ func IssueTypeRollsUp(issueType string) bool {
 	return lower == "epic" || isPortfolioLevel(lower)
 }
 
+// IsPortfolioLevel reports whether issueType is above Epic in the hierarchy
+// (Initiative, Feature, Program, Theme, Portfolio). Unlike IssueTypeRollsUp,
+// this excludes Epic — portfolio-level items roll up via the parent-link
+// field regardless of whether their children were fetched, so `effort` is
+// always worth advertising for them; Epics are only worth advertising when
+// they actually have children.
+func IsPortfolioLevel(issueType string) bool {
+	return isPortfolioLevel(issueTypeLower(issueType))
+}
+
 // AggregateNodes sums TT and SP from a slice of RollupNode into a RollupRow.
 func AggregateNodes(nodes []RollupNode, label string, truncated bool) RollupRow {
 	row := RollupRow{

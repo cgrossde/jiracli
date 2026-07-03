@@ -39,6 +39,7 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
   "reporter":        { "name": "u2", "displayName": "Sam Lee" },
   "created":         "2026-01-10T08:00:00.000+0000",
   "updated":         "2026-06-20T14:30:00.000+0000",
+  "dueDate":         "2026-07-01",
   "description":     "Steps to reproduce...",
   "labels":          ["backend", "auth"],
   "components":      ["Login"],
@@ -102,12 +103,17 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
   "sprints": [
     {"id": 2001, "name": "Sprint 42", "state": "active", "startDate": "2026-06-15", "endDate": "2026-06-29"}
   ],
-  "childrenTotal": 1
+  "childrenTotal": 1,
+  "extraFields": [
+    {"id": "environment", "label": "Env", "value": "PROD_CHANGE"}
+  ],
+  "unknownFields": ["ünïcödé"]
 }
 ```
 
 **Field notes:**
 - `resolution`: `null` when unresolved; string (e.g. `"Fixed"`) when resolved.
+- `dueDate`: string (`YYYY-MM-DD`); omitted (`omitempty`) when absent or not fetched (not in the default field set — add with `--fields duedate`).
 - `statusId`: string; the Jira status ID (e.g. `"3"` for In Progress). Omitted (`omitempty`) when the issue response does not include it. Stable — status IDs do not change when a status is renamed. Cached 7 days (`statuses` key).
 - `assignee`, `reporter`: `null` when unset.
 - `parent`, `epic`: `null` when absent.
@@ -122,6 +128,8 @@ One record per invocation. Produced by `internal/jira.IssueRecord` (`internal/ji
 - `children`: always present as an array (never `null`); empty `[]` when the issue has no children or `--no-children` is passed. Sub-tasks come from the issue response inline; Epic children are fetched via a separate search call.
 - `childrenTotal`: total count of children. May exceed `len(children)` when an Epic has more than 100 children (only the first 100 are returned).
 - `childrenError`: string; omitted (`omitempty`) when empty. Populated when the children search call fails (e.g. the project does not support `Epic Link`); the rest of the issue record is still returned.
+- `unknownFields`: array of strings; omitted (`omitempty`) when empty. Any `--fields`/`--fields-only` tokens that matched neither a default field, a raw `customfield_NNN` id, nor a name/id known to the Jira instance — a typo'd or garbage field name, in other words. The rest of the issue record is still returned; the corresponding sections are simply absent since the field was never fetched. In plain-text mode the same information is surfaced as a `⚠ unknown field(s) ignored: ...` line appended to the output.
+- `extraFields`: array of `{"id", "label", "value"}` objects; omitted (`omitempty`) when empty. Populated for any `--fields`/`--fields-only` field that doesn't have a dedicated top-level field above — built-in fields like `environment`, or any `customfield_NNNNN`. `id` is the requested field id/name, `label` its Jira display name, `value` the formatted display value (durations for numeric time fields, `name`/`displayName`/`value` for object-shaped fields, otherwise the raw string). Fields already covered elsewhere (`dueDate`, the hierarchy/sprint custom fields) are excluded here to avoid duplication. A field with an empty/null value is omitted rather than included with an empty string.
 - `links[].id`: numeric string; the link ID required by `jiracli delete link <id>`. Empty string if the Jira instance omits it (non-standard).
 ---
 
@@ -391,9 +399,9 @@ One record per invocation. Produced by `internal/jira.HierarchyChain` (`internal
 ## effort
 
 Commands (formerly `show rollup`):
-- `jiracli effort <KEY> [--json] [--depth N] [--group-by status|statusCategory] [--exclude-done|--open|--state <cat>] [--since <date>]` — hierarchy mode
-- `jiracli effort jql '<JQL>' [--group-by assignee|status|statusCategory] [--json]` — JQL mode
-- `jiracli effort sprint <id> [--group-by assignee|status|statusCategory] [--json]` — sprint mode
+- `jiracli effort <KEY> [--json] [--depth N] [--group-by status|statusCategory] [--list] [--exclude-done|--open|--state <cat>] [--since <date>]` — hierarchy mode
+- `jiracli effort jql '<JQL>' [--group-by assignee|status|statusCategory] [--list] [--json]` — JQL mode
+- `jiracli effort sprint <id> [--group-by assignee|status|statusCategory] [--list] [--json]` — sprint mode
 
 One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jira/rollup.go`).
 
@@ -444,7 +452,7 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `truncated` | bool | `true` when the fetch was capped and more items exist; omitted (`omitempty`) when false |
 | `issueTypeCounts` | map[string]int | Count per issue type, e.g. `{"Story":5,"Bug":3}`; omitted when empty |
 
-**`RollupNode` fields** — the `nodes` array is always `null` in `effort` output (the per-child list was removed; use `jiracli hierarchy <KEY>` for a per-child breakdown). The type is documented here for JSON stability:
+**`RollupNode` fields** — the `nodes` array is `null` in `effort` output unless `--list` is passed, in which case it holds one entry per child (the L1 children in hierarchy mode, even at `--depth 2`; the matched issues in JQL/sprint mode):
 
 | Field | Type | Notes |
 |---|---|---|
@@ -470,14 +478,21 @@ One record per invocation. Produced by `internal/jira.RollupTree` (`internal/jir
 | `subjectSummary` | string | Summary of the subject |
 | `subject` | `RollupRow` | The subject's own time tracking and SP |
 | `rows` | `[]RollupRow` | Hierarchy mode: level aggregates (one row at `--depth 1`, two at `--depth 2`). `--group-by` mode: status-grouped rows, one per distinct value, sorted canonically. JQL/sprint mode: group rows or a single Total row. |
-| `nodes` | `[]RollupNode` | Always `null` (per-child list removed; use `jiracli hierarchy`). Retained for JSON stability. |
+| `nodes` | `[]RollupNode` | `null` unless `--list` is passed; then one `RollupNode` per child. |
 | `hasDeeperLevel` | bool | `true` when any L1 child has its own children |
 | `maxFetchedDepth` | int | Highest depth actually fetched (1 or 2) |
 | `groupBy` | string | `"assignee"`, `"status"`, or `"statusCategory"` when `--group-by` was used; omitted (`omitempty`) otherwise |
 
 > **JQL / sprint mode:** for `effort jql` / `effort sprint`, `subjectIssueType` is `""` and `subject` fields are all-zero. The `rows` array carries the group rows (`--group-by`) or a single `Total` row. `hasDeeperLevel` is always `false`.
 
-> **Hierarchy `--group-by` mode:** one `RollupTree` JSON object is emitted per fetched level as NDJSON (not a single object). Each object's `rows` carries the status-grouped rows for that level; `groupBy` is set on every emitted object.
+> **Hierarchy `--group-by` mode:** one `RollupTree` JSON object is emitted per fetched level as NDJSON (not a single object). Each object's `rows` carries the status-grouped rows for that level; `groupBy` is set on every emitted object. When `--list` is also passed, each object's `nodes` holds that level's own children.
+
+> **`--list`:** sets `nodes` to one `RollupNode` per child instead of `null`. Example (hierarchy mode, `--list`):
+> ```json
+> "nodes": [
+>   {"key":"ACME-101","summary":"Add OAuth flow","status":"In Progress","statusCategory":"In Progress","issueType":"Story","assignee":"Jane Smith","originalEstimateSeconds":259200,"remainingEstimateSeconds":57600,"timeSpentSeconds":201600,"storyPoints":5,"childrenTotal":0,"hasChildren":false}
+> ]
+> ```
 
 No pagination trailer (single-object response per level).
 
