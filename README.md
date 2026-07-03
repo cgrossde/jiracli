@@ -49,11 +49,33 @@ Most Jira CLIs are wrappers around the REST API that return raw JSON, leaving yo
 
 ## Install
 
+### Homebrew (recommended)
+
+```sh
+brew tap cgrossde/tap
+brew trust cgrossde/tap
+brew install jiracli
+```
+
+Homebrew installs the binary to `/opt/homebrew/bin` and wires up shell completions automatically. Run `brew upgrade jiracli` (or `brew upgrade`) to get new versions.
+
+### Go install
+
 ```sh
 go install github.com/cgrossde/jiracli@latest
 ```
 
-Requires Go 1.21+. Authenticates with a **Jira Personal Access Token (PAT)**; credentials are stored in the macOS system Keychain — no config files with tokens in plaintext.
+Requires Go 1.21+. The binary lands in `$GOPATH/bin` (usually `~/.go/bin` or `~/go/bin`) — make sure that's on your `$PATH`.
+
+### Build from source
+
+```sh
+git clone git@github.com:cgrossde/jiracli.git
+cd jiracli
+go build -o jiracli .
+```
+
+Authenticates with a **Jira Personal Access Token (PAT)**; credentials are stored in the macOS system Keychain — no config files with tokens in plaintext.
 
 ## Setup
 
