@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,10 +129,19 @@ func rateLimitError(h http.Header) error {
 	remaining := h.Get("X-RateLimit-Remaining")
 	limit := h.Get("X-RateLimit-Limit")
 
+	// Some Jira DC instances send math.MaxInt64 (9223372036854775807) as a
+	// sentinel meaning "indefinitely rate limited". Treat any value ≥ 1 year
+	// as "indefinitely" so the user isn't shown a nonsensical number.
+	const oneYearSeconds = int64(365 * 24 * 3600)
+	retryAfterHuman := retryAfter
+	if secs, err := strconv.ParseInt(retryAfter, 10, 64); err == nil && secs >= oneYearSeconds {
+		retryAfterHuman = "" // fall through to the generic message
+	}
+
 	var detail string
 	switch {
-	case retryAfter != "" && retryAfter != "0":
-		detail = fmt.Sprintf("Jira has rate limited this request — wait %s second(s) before retrying", retryAfter)
+	case retryAfterHuman != "" && retryAfterHuman != "0":
+		detail = fmt.Sprintf("Jira has rate limited this request — wait %s second(s) before retrying", retryAfterHuman)
 		if remaining != "" && limit != "" {
 			detail += fmt.Sprintf(" (%s/%s requests remaining)", remaining, limit)
 		}

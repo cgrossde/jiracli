@@ -225,6 +225,23 @@ func TestRateLimitError_retryAfterZero(t *testing.T) {
 	}
 }
 
+func TestRateLimitError_maxInt64RetryAfter(t *testing.T) {
+	// Jira DC sometimes sends math.MaxInt64 as retry-after when the account
+	// is indefinitely blocked. We should NOT print the raw number.
+	h := http.Header{}
+	h.Set("retry-after", "9223372036854775807")
+	err := rateLimitError(h)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "9223372036854775807") {
+		t.Errorf("error must not expose MaxInt64 sentinel to user: %v", err)
+	}
+	if !strings.Contains(err.Error(), "wait a moment") {
+		t.Errorf("expected generic wait message for MaxInt64 sentinel: %v", err)
+	}
+}
+
 func TestPostMultipart_headersAndContentType(t *testing.T) {
 	// Write a temp file to upload.
 	tmpDir := t.TempDir()
