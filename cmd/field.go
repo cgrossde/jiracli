@@ -140,6 +140,40 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 	var validation []jira.ValidationRow
 	var effectLines []string
 
+	// Epic must be set alone — it uses the Agile endpoint, not the standard PUT.
+	hasEpic := false
+	for _, spec := range specs {
+		if strings.EqualFold(spec.Name, "epic") {
+			hasEpic = true
+			break
+		}
+	}
+	if hasEpic && len(specs) > 1 {
+		return "", fmt.Errorf("epic must be set on its own — run: jiracli edit field %s epic=<EPIC-KEY> (uses the Agile epic API; other fields go through PUT and can't carry Epic Link)", key)
+	}
+	if hasEpic {
+		// Epic-only path: short-circuit before generic PUT assembly.
+		spec := specs[0]
+		if spec.Op != jira.OpReplace {
+			return "", fmt.Errorf("epic is single-value — use epic=<EPIC-KEY>")
+		}
+		value := spec.Raw
+		p := jira.Preview{
+			Agile:       true,
+			Method:      "POST",
+			Path:        "/epic/" + value + "/issue",
+			Body:        map[string]any{"issues": []string{key}},
+			Description: fmt.Sprintf("epic → %s", value),
+			Validation: []jira.ValidationRow{
+				{Status: "✓", Message: fmt.Sprintf("epic %s (via Agile API)", value)},
+			},
+		}
+		return HandleWrite(ctx, client, entry.URL, p, flags.Yes, func(_ []byte) string {
+			return fmt.Sprintf("✓ linked %s to epic %s\n  → jiracli show %s\n", key, value, key)
+		})
+	}
+
+
 	for _, spec := range specs {
 		fieldName := spec.Name
 		value := spec.Raw
@@ -308,19 +342,9 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 			effectLines = append(effectLines, fmt.Sprintf("fixVersions %s %s", spec.Op.String(), value))
 
 		case "epic":
-			if spec.Op != jira.OpReplace {
-				return "", fmt.Errorf("epic is single-value — use epic=<EPIC-KEY>")
-			}
-			epicFieldID := entry.Hierarchy.EpicLinkField
-			if epicFieldID == "" {
-				epicFieldID = "customfield_10014" // fallback default
-			}
-			fieldsBlock[epicFieldID] = value
-			validation = append(validation, jira.ValidationRow{
-				Status:  "✓",
-				Message: fmt.Sprintf("epic %s (via %s)", value, epicFieldID),
-			})
-			effectLines = append(effectLines, fmt.Sprintf("epic → %s", value))
+			// Epic via Agile endpoint is handled above; reaching here means
+			// mixed invocation slipped through (shouldn't happen).
+			return "", fmt.Errorf("epic must be set on its own — run: jiracli edit field %s epic=<EPIC-KEY>", key)
 
 		default:
 			// Generic scalar field — place in fields block as a plain string.

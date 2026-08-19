@@ -17,10 +17,11 @@ type ValidationRow struct {
 // Preview describes a write operation before it is executed.
 type Preview struct {
 	Method      string          // "POST", "PUT", or "DELETE"
-	Path        string          // path after /rest/api/2, e.g. "/issue/ACME-123/comment"
+	Path        string          // path after /rest/api/2 (or /rest/agile/1.0 when Agile==true)
 	Body        any             // marshalled to JSON for display (nil for DELETE)
 	Description string          // human-readable effect, e.g. "+ 1 comment on ACME-123 by Alex Chen"
 	Validation  []ValidationRow // ✓/⚠/✗ rows
+	Agile       bool            // when true, dispatch through /rest/agile/1.0 instead of /rest/api/2
 }
 
 // Render returns the proposal §4.3 preview block as a string.
@@ -28,7 +29,11 @@ func (p Preview) Render(baseURL string) string {
 	var sb strings.Builder
 
 	sb.WriteString("DRY RUN — no changes made.\n\n")
-	sb.WriteString(fmt.Sprintf("%s %s/rest/api/2%s\n\n", p.Method, baseURL, p.Path))
+	if p.Agile {
+		sb.WriteString(fmt.Sprintf("%s %s/rest/agile/1.0%s\n\n", p.Method, baseURL, p.Path))
+	} else {
+		sb.WriteString(fmt.Sprintf("%s %s/rest/api/2%s\n\n", p.Method, baseURL, p.Path))
+	}
 
 	if p.Body != nil {
 		sb.WriteString("Body:\n")
@@ -58,9 +63,22 @@ func (p Preview) Render(baseURL string) string {
 }
 
 // Execute sends the preview's request via the client.
-// p.Path must be the path segment after /rest/api/2 (the client prepends the base).
+// p.Path must be the path segment after /rest/api/2 (non-Agile) or /rest/agile/1.0 (Agile).
 func (p Preview) Execute(ctx context.Context, c *Client) ([]byte, error) {
 	raw, _ := json.Marshal(p.Body)
+	if p.Agile {
+		if p.Method != "POST" {
+			return nil, fmt.Errorf("Agile preview only supports POST, got %s", p.Method)
+		}
+		body, status, err := c.AgilePost(ctx, p.Path, nil, bytes.NewReader(raw))
+		if err != nil {
+			return nil, err
+		}
+		if status != 200 && status != 204 {
+			return nil, fmt.Errorf("%w", MapStatus("", status, body))
+		}
+		return body, nil
+	}
 	switch p.Method {
 	case "POST":
 		body, status, err := c.Post(ctx, p.Path, nil, bytes.NewReader(raw), "application/json")

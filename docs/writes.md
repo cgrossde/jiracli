@@ -284,7 +284,7 @@ On `--yes`: executes sequentially, collecting per-key errors rather than abortin
 | `fixVersions` / `versions` | `lookup versions --project <KEY>` (1h cache) |
 | `labels` | `lookup labels --project <KEY>` (5-min cache); bypassed with `--allow-new` |
 | `assignee` | `/user/assignable/search` |
-| `epic` | Value is passed as-is; resolved to the instance's Epic Link field (`customfield_NNNNN`) from the stored `config hierarchy` profile. No server-side pre-validation. |
+| `epic` | Issue is linked to the given epic via `POST /rest/agile/1.0/epic/{epicKey}/issue`. **Must be the only spec** — combining `epic=` with other specs is rejected with a corrective error. No client-side pre-validation of the epic key. |
 
 `--allow-new` skips client-side validation for labels and versions, passing the value to the server as-is. For components, `--allow-new` skips the check but Jira itself may reject: component creation requires admin rights. Server-side rejection is surfaced verbatim with a hint to contact a project admin.
 
@@ -298,6 +298,11 @@ Priorities, link types, and assignees have no `--allow-new` override.
 ### Success output
 
     ✓ updated ACME-123 (2 field(s))
+      → jiracli show ACME-123
+
+For epic-only invocations (`jiracli edit field ACME-123 epic=PROJ-42`), success output is:
+
+    ✓ linked ACME-123 to epic PROJ-42
       → jiracli show ACME-123
 
 ### Errors
@@ -331,6 +336,11 @@ unknown priority "High" for project WEB
         Available: 1 - Very High, 2 - High, 3 - Medium, 4 - Low
         Run: jiracli lookup priorities --project WEB
         Did you mean: 1 - Very High, 2 - High?
+[exit:1 | Xms]
+```
+
+```
+epic must be set on its own — run: jiracli edit field ACME-123 epic=<EPIC-KEY> (uses the Agile epic API; other fields go through PUT and can't carry Epic Link)
 [exit:1 | Xms]
 ```
 
@@ -449,12 +459,13 @@ Creates a new issue. Dry-run by default.
 | `--description <text>` | Issue description |
 | `--priority <name>` | Priority |
 | `--assignee <user>` | Assignee username or `me` |
-| `--epic <KEY>` | Epic key to link this issue to (e.g. `PROJ-123`); resolved via the instance's Epic Link field (auto-discovered from `config hierarchy`) |
+| `--epic <KEY>` | Epic key to link the new issue to after creation, via `POST /rest/agile/1.0/epic/{epicKey}/issue`. Non-fatal: if the Agile link step fails, a ⚠ warning is printed but the created key is always shown and exit code is 0. |
 | `--component <name>` | Component name (repeatable) |
 | `--label <label>` | Label (repeatable) |
 | `--fix-version <v>` | Fix version (repeatable) |
 | `--custom <name=value>` | Custom field (repeatable) |
 | `--allow-new` | Allow new labels/versions (skips client-side validation) |
+| `--skip-field <name>` | Skip a draft or CLI field by name when applying a draft. Repeatable. Valid: `description`, `priority`, `assignee`, `epic`, `components`, `labels`, `fixVersions`, `custom:<name>`. Cannot skip `project`, `type`, or `summary` (required). Unknown name → hard error. |
 | `--yes` | Apply without confirmation |
 | `--no-cache` | Bypass local cache |
 | `--profile <name>` | Credential profile |
@@ -497,12 +508,21 @@ Validation:
   ✓ project WEB exists, current user can create
   ✓ type Bug is valid for project WEB
   ✓ component "AuthService" matched 1 component in WEB
-  ✓ priority "High" is in the WEB priority scheme
+  ✓ priority "2 - High" valid
   ✓ label "regression" is in use in WEB
   ✓ all required fields for Bug in WEB are present
 ```
 
 `✗` rows (unknown component, missing required field, invalid priority) block apply even with `--yes`.
+
+When the priority is not found, a `✗` row appears with the available names and a fuzzy suggestion:
+
+```
+  ✗ priority "High" not in WEB scheme
+       available: 1 - Very High, 2 - High, 3 - Medium, 4 - Low
+       run: jiracli lookup priorities --project WEB
+       did you mean: 2 - High?
+```
 
 `⚠` rows (new label without `--allow-new`) warn but do not block.
 
@@ -512,6 +532,9 @@ Required fields are resolved from `GET /issue/createmeta/<KEY>/issuetypes/<typeI
 
     ✓ created WEB-815: Login flow times out on slow networks
       → jiracli show WEB-815
+      → linked to epic PROJ-42
+
+The `→ linked to epic` line appears when `--epic` was set and the Agile link succeeded. On failure: `⚠ created but epic link failed: <reason>` with a corrective `jiracli edit field WEB-815 epic=PROJ-42` command; exit code remains 0.
 
 ### Errors
 
@@ -521,6 +544,13 @@ component "AuthServce" not found in project WEB.
         List:    jiracli lookup components --project WEB
         Force:   re-run with --allow-new   (creates it)
 [exit:1 | Xms]
+```
+
+### Examples
+
+```
+jiracli create --from-draft task.yaml --skip-field epic --skip-field labels
+jiracli create --from-draft task.yaml --skip-field priority
 ```
 
 ---

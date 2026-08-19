@@ -31,6 +31,23 @@ func (c *Client) CreateLink(ctx context.Context, linkType, sourceKey, targetKey 
 	return nil
 }
 
+// AddIssuesToEpic moves issues into an epic via the Agile REST API
+// (POST /rest/agile/1.0/epic/{epicKey}/issue). This works on Jira DC even when
+// the Epic Link custom field is not on the create/edit screen, because it does
+// not go through screen-field validation. A successful call returns HTTP 204.
+func (c *Client) AddIssuesToEpic(ctx context.Context, epicKey string, issueKeys []string) error {
+	payload := map[string]any{"issues": issueKeys}
+	data, _ := json.Marshal(payload)
+	respBody, status, err := c.AgilePost(ctx, "/epic/"+epicKey+"/issue", nil, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	if status != 204 && status != 200 {
+		return fmt.Errorf("add issue(s) to epic %s: %w", epicKey, MapStatus("", status, respBody))
+	}
+	return nil
+}
+
 // AggregateLabelsByProject pages through all issues in a project that have
 // labels and collects the complete deduplicated label set. Results are sorted
 // and cached for TTLLabels (5 min).

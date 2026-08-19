@@ -24,11 +24,12 @@ type CreateFlags struct {
 	Description string
 	Priority    string
 	Assignee    string
-	Epic        string   // epic key, resolved via Hierarchy.EpicLinkField
+	Epic        string   // epic key; issue linked after create via Agile API
 	Components  []string
 	Labels      []string
 	FixVersions []string
 	Custom      []string // "name=value" pairs
+	SkipFields  []string // field names to skip (--skip-field)
 	AllowNew    bool
 	Yes         bool
 	NoCache     bool
@@ -96,6 +97,7 @@ func NewCreateCmd() *cobra.Command {
 	c.Flags().StringArrayVar(&flags.Labels, "label", nil, "Label (repeatable)")
 	c.Flags().StringArrayVar(&flags.FixVersions, "fix-version", nil, "Fix version (repeatable)")
 	c.Flags().StringArrayVar(&flags.Custom, "custom", nil, "Custom field name=value (repeatable)")
+	c.Flags().StringArrayVar(&flags.SkipFields, "skip-field", nil, "Skip a draft/CLI field by name: summary|description|priority|assignee|epic|components|labels|fixVersions|custom:<name> (repeatable)")
 	c.Flags().BoolVar(&flags.AllowNew, "allow-new", false, "Allow new labels/versions")
 	c.Flags().BoolVar(&flags.Yes, "yes", false, "Apply without confirmation")
 	c.Flags().BoolVar(&flags.NoCache, "no-cache", false, "Bypass local cache")
@@ -156,6 +158,40 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 		}
 		for k, v := range d.CustomFields {
 			flags.Custom = append(flags.Custom, k+"="+v)
+		}
+	}
+
+	// Apply --skip-field overrides (after draft-merge, before required-field checks).
+	for _, name := range flags.SkipFields {
+		switch strings.ToLower(name) {
+		case "description":
+			flags.Description = ""
+		case "priority":
+			flags.Priority = ""
+		case "assignee":
+			flags.Assignee = ""
+		case "epic":
+			flags.Epic = ""
+		case "components":
+			flags.Components = nil
+		case "labels":
+			flags.Labels = nil
+		case "fixversions":
+			flags.FixVersions = nil
+		default:
+			if strings.HasPrefix(strings.ToLower(name), "custom:") {
+				target := name[len("custom:"):]
+				tl := strings.ToLower(target)
+				var kept []string
+				for _, kv := range flags.Custom {
+					if idx := strings.Index(kv, "="); idx > 0 && strings.ToLower(kv[:idx]) != tl {
+						kept = append(kept, kv)
+					}
+				}
+				flags.Custom = kept
+			} else {
+				return "", fmt.Errorf("unknown --skip-field %q — valid: description, priority, assignee, epic, components, labels, fixVersions, custom:<name>", name)
+			}
 		}
 	}
 
@@ -298,9 +334,23 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 				Message: fmt.Sprintf("priority %q valid", flags.Priority),
 			})
 		} else {
+			var names []string
+			var suggestions []string
+			ql := strings.ToLower(flags.Priority)
+			for _, p := range priorities {
+				names = append(names, p.Name)
+				if strings.Contains(strings.ToLower(p.Name), ql) {
+					suggestions = append(suggestions, p.Name)
+				}
+			}
+			msg := fmt.Sprintf("priority %q not in %s scheme\n     available: %s\n     run: jiracli lookup priorities --project %s",
+				flags.Priority, flags.Project, strings.Join(names, ", "), flags.Project)
+			if len(suggestions) > 0 {
+				msg += fmt.Sprintf("\n     did you mean: %s?", strings.Join(suggestions, ", "))
+			}
 			validation = append(validation, jira.ValidationRow{
 				Status:  "✗",
-				Message: fmt.Sprintf("priority %q not in %s scheme — run: jiracli lookup priorities --project %s", flags.Priority, flags.Project, flags.Project),
+				Message: msg,
 			})
 		}
 	}
@@ -363,14 +413,9 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 		fields["assignee"] = map[string]string{"name": resolvedAssignee}
 	}
 	if flags.Epic != "" {
-		epicFieldID := entry.Hierarchy.EpicLinkField
-		if epicFieldID == "" {
-			epicFieldID = "customfield_10014" // fallback default
-		}
-		fields[epicFieldID] = flags.Epic
 		validation = append(validation, jira.ValidationRow{
 			Status:  "✓",
-			Message: fmt.Sprintf("epic %s (via %s)", flags.Epic, epicFieldID),
+			Message: fmt.Sprintf("epic %s (linked after create via Agile API)", flags.Epic),
 		})
 	}
 	if len(flags.Components) > 0 {
@@ -419,6 +464,14 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 			Key string `json:"key"`
 		}
 		json.Unmarshal(resp, &r) //nolint:errcheck
-		return fmt.Sprintf("✓ created %s: %s\n  → jiracli show %s\n", r.Key, flags.Summary, r.Key)
+		out := fmt.Sprintf("✓ created %s: %s\n  → jiracli show %s\n", r.Key, flags.Summary, r.Key)
+		if flags.Epic != "" && r.Key != "" {
+			if linkErr := client.AddIssuesToEpic(ctx, flags.Epic, []string{r.Key}); linkErr != nil {
+				out += fmt.Sprintf("  ⚠ created but epic link failed: %v\n     run: jiracli edit field %s epic=%s\n", linkErr, r.Key, flags.Epic)
+			} else {
+				out += fmt.Sprintf("  → linked to epic %s\n", flags.Epic)
+			}
+		}
+		return out
 	})
 }
