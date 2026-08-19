@@ -140,38 +140,44 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 	var validation []jira.ValidationRow
 	var effectLines []string
 
-	// Epic must be set alone — it uses the Agile endpoint, not the standard PUT.
-	hasEpic := false
+	// Separate epic from other specs: epic uses the Agile endpoint (POST
+	// /rest/agile/1.0/epic/{key}/issue) while everything else goes through PUT
+	// /issue/{key}. In a mixed invocation both calls are fired sequentially —
+	// PUT first, then the Agile POST. Epic-link failure is non-fatal (⚠ line,
+	// exit 0) when other fields were also updated.
+	var epicValue string
+	var nonEpicSpecs []jira.FieldSpec
 	for _, spec := range specs {
 		if strings.EqualFold(spec.Name, "epic") {
-			hasEpic = true
-			break
+			if spec.Op != jira.OpReplace {
+				return "", fmt.Errorf("epic is single-value — use epic=<EPIC-KEY>")
+			}
+			epicValue = spec.Raw
+		} else {
+			nonEpicSpecs = append(nonEpicSpecs, spec)
 		}
 	}
-	if hasEpic && len(specs) > 1 {
-		return "", fmt.Errorf("epic must be set on its own — run: jiracli edit field %s epic=<EPIC-KEY> (uses the Agile epic API; other fields go through PUT and can't carry Epic Link)", key)
-	}
-	if hasEpic {
-		// Epic-only path: short-circuit before generic PUT assembly.
-		spec := specs[0]
-		if spec.Op != jira.OpReplace {
-			return "", fmt.Errorf("epic is single-value — use epic=<EPIC-KEY>")
-		}
-		value := spec.Raw
+
+	// Epic-only path: no PUT needed; short-circuit to the Agile preview.
+	if epicValue != "" && len(nonEpicSpecs) == 0 {
 		p := jira.Preview{
 			Agile:       true,
 			Method:      "POST",
-			Path:        "/epic/" + value + "/issue",
+			Path:        "/epic/" + epicValue + "/issue",
 			Body:        map[string]any{"issues": []string{key}},
-			Description: fmt.Sprintf("epic → %s", value),
+			Description: fmt.Sprintf("epic → %s", epicValue),
 			Validation: []jira.ValidationRow{
-				{Status: "✓", Message: fmt.Sprintf("epic %s (via Agile API)", value)},
+				{Status: "✓", Message: fmt.Sprintf("epic %s (via Agile API)", epicValue)},
 			},
 		}
 		return HandleWrite(ctx, client, entry.URL, p, flags.Yes, func(_ []byte) string {
-			return fmt.Sprintf("✓ linked %s to epic %s\n  → jiracli show %s\n", key, value, key)
+			return fmt.Sprintf("✓ linked %s to epic %s\n  → jiracli show %s\n", key, epicValue, key)
 		})
 	}
+
+	// Mixed or non-epic path: use nonEpicSpecs for the PUT.
+	specs = nonEpicSpecs
+
 
 
 	for _, spec := range specs {
@@ -341,11 +347,6 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 			})
 			effectLines = append(effectLines, fmt.Sprintf("fixVersions %s %s", spec.Op.String(), value))
 
-		case "epic":
-			// Epic via Agile endpoint is handled above; reaching here means
-			// mixed invocation slipped through (shouldn't happen).
-			return "", fmt.Errorf("epic must be set on its own — run: jiracli edit field %s epic=<EPIC-KEY>", key)
-
 		default:
 			// Generic scalar field — place in fields block as a plain string.
 			fieldsBlock[fieldName] = value
@@ -357,6 +358,18 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 		}
 	}
 
+	// When a mixed invocation includes epic, add an informational row and note
+	// in the effect description so the preview reflects both operations.
+	nFields := len(specs)
+	if epicValue != "" {
+		effectLines = append(effectLines, fmt.Sprintf("epic → %s (Agile API, after PUT)", epicValue))
+		validation = append(validation, jira.ValidationRow{
+			Status:  "✓",
+			Message: fmt.Sprintf("epic %s (linked via Agile API after PUT)", epicValue),
+		})
+	}
+
+
 	// Assemble PUT body.
 	body := map[string]any{}
 	if len(fieldsBlock) > 0 {
@@ -366,7 +379,7 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 		body["update"] = updateBlock
 	}
 
-	n := len(specs)
+	n := nFields
 	p := jira.Preview{
 		Method:      "PUT",
 		Path:        "/issue/" + key,
@@ -376,7 +389,15 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 	}
 
 	return HandleWrite(ctx, client, entry.URL, p, flags.Yes, func(_ []byte) string {
-		return fmt.Sprintf("✓ updated %s (%d field(s))\n  → jiracli show %s\n", key, n, key)
+		out := fmt.Sprintf("✓ updated %s (%d field(s))\n  → jiracli show %s\n", key, n, key)
+		if epicValue != "" {
+			if linkErr := client.AddIssuesToEpic(ctx, epicValue, []string{key}); linkErr != nil {
+				out += fmt.Sprintf("  ⚠ epic link failed: %v\n     run: jiracli edit field %s epic=%s\n", linkErr, key, epicValue)
+			} else {
+				out += fmt.Sprintf("  → linked to epic %s\n", epicValue)
+			}
+		}
+		return out
 	})
 }
 

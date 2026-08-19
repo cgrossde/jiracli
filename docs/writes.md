@@ -284,7 +284,7 @@ On `--yes`: executes sequentially, collecting per-key errors rather than abortin
 | `fixVersions` / `versions` | `lookup versions --project <KEY>` (1h cache) |
 | `labels` | `lookup labels --project <KEY>` (5-min cache); bypassed with `--allow-new` |
 | `assignee` | `/user/assignable/search` |
-| `epic` | Issue is linked to the given epic via `POST /rest/agile/1.0/epic/{epicKey}/issue`. **Must be the only spec** — combining `epic=` with other specs is rejected with a corrective error. No client-side pre-validation of the epic key. |
+| `epic` | Issue is linked to the given epic via `POST /rest/agile/1.0/epic/{epicKey}/issue` **after** the PUT completes. Can be combined freely with other field specs — the PUT carries all non-epic fields, then the Agile POST fires. Epic-link failure is non-fatal (⚠ line printed, exit 0). No client-side pre-validation of the epic key. |
 
 `--allow-new` skips client-side validation for labels and versions, passing the value to the server as-is. For components, `--allow-new` skips the check but Jira itself may reject: component creation requires admin rights. Server-side rejection is surfaced verbatim with a hint to contact a project admin.
 
@@ -300,10 +300,23 @@ Priorities, link types, and assignees have no `--allow-new` override.
     ✓ updated ACME-123 (2 field(s))
       → jiracli show ACME-123
 
-For epic-only invocations (`jiracli edit field ACME-123 epic=PROJ-42`), success output is:
+When `epic=` is combined with other specs, the epic link fires after the PUT:
+
+    ✓ updated ACME-123 (2 field(s))
+      → jiracli show ACME-123
+      → linked to epic PROJ-42
+
+For epic-only invocations (`jiracli edit field ACME-123 epic=PROJ-42`):
 
     ✓ linked ACME-123 to epic PROJ-42
       → jiracli show ACME-123
+
+On epic-link failure (PUT succeeded, Agile POST failed):
+
+    ✓ updated ACME-123 (2 field(s))
+      → jiracli show ACME-123
+      ⚠ epic link failed: <reason>
+         run: jiracli edit field ACME-123 epic=PROJ-42
 
 ### Errors
 
@@ -339,10 +352,6 @@ unknown priority "High" for project WEB
 [exit:1 | Xms]
 ```
 
-```
-epic must be set on its own — run: jiracli edit field ACME-123 epic=<EPIC-KEY> (uses the Agile epic API; other fields go through PUT and can't carry Epic Link)
-[exit:1 | Xms]
-```
 
 ### Examples
 
@@ -353,6 +362,7 @@ jiracli edit field ACME-123 "description=@desc.md"
 jiracli edit field ACME-123 "assignee=-"
 jiracli edit field ACME-123 "fixVersions+=4.5.0" --allow-new
 jiracli edit field ACME-123 "epic=PROJ-42"
+jiracli edit field ACME-123 "priority=High" "epic=PROJ-42"  # PUT + Agile in one call
 ```
 
 ---

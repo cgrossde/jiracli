@@ -96,17 +96,20 @@ jiracli edit status   PROJ-123 "In Review"                   # dry-run first
 jiracli edit status   PROJ-123 PROJ-124 Done --yes           # bulk apply
 jiracli edit assignee PROJ-123 me
 jiracli edit field    PROJ-123 "priority=High" "labels+=regression"
+jiracli edit field    PROJ-123 "priority=High" "epic=PROJ-42"        # PUT + Agile link in one call
 ```
 All edits default to dry-run; pass `--yes` to apply. Bulk: list all keys before the value. Run `jiracli edit --help` for all subcommands.
 
 ### Create an issue
 ```sh
 jiracli create --project PROJ --type Bug --summary "..." --yes
+jiracli create --project PROJ --type Bug --summary "..." --epic PROJ-42 --yes  # create + link to epic
 
 # Draft workflow — preferred for anything non-trivial
 jiracli create --init-draft new-issue.yaml   # generates a template
 jiracli create --from-draft new-issue.yaml   # preview
 jiracli create --from-draft new-issue.yaml --yes
+jiracli create --from-draft new-issue.yaml --skip-field epic --yes  # skip a field from the draft
 ```
 Run `jiracli create --help` for all fields.
 
@@ -219,6 +222,8 @@ Run `jiracli add --help` and `jiracli delete --help` for more.
 **Truncated output** (>200 lines) is written to `<tmpdir>/jiracli-output/output-N.txt` with exploration hints inline (`<tmpdir>` is the OS temp dir — `/tmp` on Linux, `$TMPDIR` on macOS; the printed hint always shows the real path). Use `grep`/`head`/`tail` on that file rather than re-running.
 
 **When in doubt, run `--help`.** `jiracli --help`, `jiracli <command> --help`, and `jiracli <command> <subcommand> --help` are always up to date and cover every flag. The skill covers the most common cases; help covers everything.
+
+**`epic` in `edit field` fires after the PUT, not inside it.** `jiracli edit field ACME-123 "priority=High" "epic=PROJ-42"` issues a `PUT /issue/ACME-123` for priority, then `POST /rest/agile/1.0/epic/PROJ-42/issue` for the epic link. The dry-run preview shows the PUT body only (epic excluded); the Agile call is noted in the Effect line and a `✓` validation row. Epic-link failure is non-fatal — the field update is committed regardless.
 
 **Use `hierarchy` to find where a ticket sits in the hierarchy.** `--parent` only walks one level. When asked which epic, initiative, portfolio item, or any higher-level parent a ticket belongs to — or when mapping a set of tickets up the hierarchy — use `jiracli hierarchy PROJ-123`. It returns the full chain (e.g. Story → Epic → Initiative/Portfolio) in a single call. Do not chain `--parent` calls.
 
