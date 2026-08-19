@@ -412,10 +412,15 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 	if resolvedAssignee != "" {
 		fields["assignee"] = map[string]string{"name": resolvedAssignee}
 	}
+	epicLinkFieldID := ""
 	if flags.Epic != "" {
+		epicLinkFieldID = "customfield_10014" // default; override if resolvable
+		if fieldID, _, rErr := client.ResolveFieldID(ctx, "Epic Link", store, flags.NoCache); rErr == nil {
+			epicLinkFieldID = fieldID
+		}
 		validation = append(validation, jira.ValidationRow{
 			Status:  "✓",
-			Message: fmt.Sprintf("epic %s (linked after create via Agile API)", flags.Epic),
+			Message: fmt.Sprintf("epic %s (linked after create via Agile API, PUT %s fallback)", flags.Epic, epicLinkFieldID),
 		})
 	}
 	if len(flags.Components) > 0 {
@@ -466,7 +471,7 @@ func Create(ctx context.Context, flags CreateFlags) (string, error) {
 		json.Unmarshal(resp, &r) //nolint:errcheck
 		out := fmt.Sprintf("✓ created %s: %s\n  → jiracli show %s\n", r.Key, flags.Summary, r.Key)
 		if flags.Epic != "" && r.Key != "" {
-			if linkErr := client.AddIssuesToEpic(ctx, flags.Epic, []string{r.Key}); linkErr != nil {
+			if linkErr := client.AddIssuesToEpic(ctx, flags.Epic, []string{r.Key}, epicLinkFieldID); linkErr != nil {
 				out += fmt.Sprintf("  ⚠ created but epic link failed: %v\n     run: jiracli edit field %s epic=%s\n", linkErr, r.Key, flags.Epic)
 			} else {
 				out += fmt.Sprintf("  → linked to epic %s\n", flags.Epic)

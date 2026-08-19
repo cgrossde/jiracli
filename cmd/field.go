@@ -158,21 +158,48 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 		}
 	}
 
-	// Epic-only path: no PUT needed; short-circuit to the Agile preview.
-	if epicValue != "" && len(nonEpicSpecs) == 0 {
-		p := jira.Preview{
-			Agile:       true,
-			Method:      "POST",
-			Path:        "/epic/" + epicValue + "/issue",
-			Body:        map[string]any{"issues": []string{key}},
-			Description: fmt.Sprintf("epic → %s", epicValue),
-			Validation: []jira.ValidationRow{
-				{Status: "✓", Message: fmt.Sprintf("epic %s (via Agile API)", epicValue)},
-			},
+	// Resolve the instance's Epic Link custom-field id once; used both for the
+	// preview description and as the PUT fallback target inside AddIssuesToEpic.
+	epicLinkFieldID := ""
+	if epicValue != "" {
+		epicLinkFieldID = "customfield_10014" // default; override if resolvable
+		if fieldID, _, rErr := client.ResolveFieldID(ctx, "Epic Link", store, flags.NoCache); rErr == nil {
+			epicLinkFieldID = fieldID
 		}
-		return HandleWrite(ctx, client, entry.URL, p, flags.Yes, func(_ []byte) string {
-			return fmt.Sprintf("✓ linked %s to epic %s\n  → jiracli show %s\n", key, epicValue, key)
-		})
+	}
+
+	// Epic-only path: no PUT of other fields needed. Apply the link via
+	// AddIssuesToEpic (Agile POST with a per-issue PUT fallback). This is the
+	// sole operation, so a failure must surface as a non-zero exit — inline the
+	// dry-run / confirm / apply lifecycle rather than routing through HandleWrite
+	// (whose onSuccess callback cannot report an error).
+	if epicValue != "" && len(nonEpicSpecs) == 0 {
+		var sb strings.Builder
+		sb.WriteString("DRY RUN — no changes made.\n\n")
+		sb.WriteString(fmt.Sprintf("Set Epic Link on %s → %s\n", key, epicValue))
+		sb.WriteString(fmt.Sprintf("  via POST %s/rest/agile/1.0/epic/%s/issue\n", entry.URL, epicValue))
+		sb.WriteString(fmt.Sprintf("  fallback PUT %s/rest/api/2/issue/%s {\"fields\":{\"%s\":\"%s\"}}\n", entry.URL, key, epicLinkFieldID, epicValue))
+		preview := sb.String()
+
+		doApply := flags.Yes
+		if !doApply {
+			apply, ttyAvailable := promptApply()
+			if !ttyAvailable {
+				return preview + "\nApply with: re-run with --yes\n", nil
+			}
+			if !apply {
+				return preview + "\naborted\n", nil
+			}
+			doApply = true
+		}
+		if err := client.AddIssuesToEpic(ctx, epicValue, []string{key}, epicLinkFieldID); err != nil {
+			return "", fmt.Errorf("epic link failed: %w", err)
+		}
+		out := fmt.Sprintf("✓ linked %s to epic %s\n  → jiracli show %s\n", key, epicValue, key)
+		if flags.Yes {
+			return out, nil
+		}
+		return preview + "\n" + out, nil
 	}
 
 	// Mixed or non-epic path: use nonEpicSpecs for the PUT.
@@ -391,7 +418,7 @@ func FieldSet(ctx context.Context, flags fieldSetFlags, key string, tokens []str
 	return HandleWrite(ctx, client, entry.URL, p, flags.Yes, func(_ []byte) string {
 		out := fmt.Sprintf("✓ updated %s (%d field(s))\n  → jiracli show %s\n", key, n, key)
 		if epicValue != "" {
-			if linkErr := client.AddIssuesToEpic(ctx, epicValue, []string{key}); linkErr != nil {
+			if linkErr := client.AddIssuesToEpic(ctx, epicValue, []string{key}, epicLinkFieldID); linkErr != nil {
 				out += fmt.Sprintf("  ⚠ epic link failed: %v\n     run: jiracli edit field %s epic=%s\n", linkErr, key, epicValue)
 			} else {
 				out += fmt.Sprintf("  → linked to epic %s\n", epicValue)

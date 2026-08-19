@@ -25,7 +25,7 @@ func TestAddIssuesToEpic_success(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL)
-	err := c.AddIssuesToEpic(context.Background(), "EPIC-1", []string{"PROJ-2"})
+	err := c.AddIssuesToEpic(context.Background(), "EPIC-1", []string{"PROJ-2"}, "")
 	if err != nil {
 		t.Fatalf("AddIssuesToEpic: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestAddIssuesToEpic_success(t *testing.T) {
 	}
 }
 
-func TestAddIssuesToEpic_errorWrapsServerMessage(t *testing.T) {
+func TestAddIssuesToEpic_errorNoFallbackWrapsServerMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -43,11 +43,70 @@ func TestAddIssuesToEpic_errorWrapsServerMessage(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL)
-	err := c.AddIssuesToEpic(context.Background(), "EPIC-1", []string{"PROJ-2"})
+	// Empty epicLinkFieldID → no PUT fallback; the Agile error surfaces directly.
+	err := c.AddIssuesToEpic(context.Background(), "EPIC-1", []string{"PROJ-2"}, "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if !strings.Contains(err.Error(), "EPIC-1") {
 		t.Errorf("error %q should mention epic key", err.Error())
+	}
+}
+
+// When the Agile endpoint rejects the link with a screen-validation 400, the
+// client falls back to PUT /issue/{key} with the resolved Epic Link field id.
+func TestAddIssuesToEpic_putFallbackOnAgile400(t *testing.T) {
+	var putBody map[string]map[string]string
+	agileCalled, putCalled := false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/rest/agile/1.0/epic/EPIC-1/issue":
+			agileCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"errorMessages":[],"errors":{"customfield_10014":"Field 'customfield_10014' cannot be set. It is not on the appropriate screen, or unknown."}}`)) //nolint:errcheck
+		case r.Method == "PUT" && r.URL.Path == "/rest/api/2/issue/PROJ-2":
+			putCalled = true
+			if err := json.NewDecoder(r.Body).Decode(&putBody); err != nil {
+				t.Errorf("decode PUT body: %v", err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL)
+	err := c.AddIssuesToEpic(context.Background(), "EPIC-1", []string{"PROJ-2"}, "customfield_10014")
+	if err != nil {
+		t.Fatalf("AddIssuesToEpic with fallback: %v", err)
+	}
+	if !agileCalled || !putCalled {
+		t.Fatalf("expected both Agile POST and PUT fallback; agile=%v put=%v", agileCalled, putCalled)
+	}
+	if got := putBody["fields"]["customfield_10014"]; got != "EPIC-1" {
+		t.Errorf("PUT fields.customfield_10014 = %q, want EPIC-1", got)
+	}
+}
+
+// When the Agile endpoint fails AND the PUT fallback also fails, the aggregate
+// error names the failing issue key.
+func TestAddIssuesToEpic_putFallbackAlsoFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"errorMessages":[],"errors":{"customfield_10014":"cannot be set"}}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL)
+	err := c.AddIssuesToEpic(context.Background(), "EPIC-1", []string{"PROJ-2"}, "customfield_10014")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "PROJ-2") {
+		t.Errorf("error %q should name the failing issue key", err.Error())
 	}
 }

@@ -49,7 +49,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `cache clear` | `--profile`, `--key`, `--yes` | Purge cache entries (use `cache list` to see key names) |
 | `edit status <KEY> [KEY...] <name-or-id>` | `--profile`, `--comment`, `--yes` | Transition one or more issues; last arg is always the transition name/id |
 | `edit assignee <KEY> [KEY...] <user-or-id>` | `--profile`, `--yes` | Assign one or more issues; last arg is always the user (`-` to unassign, `me` for self) |
-| `edit field <KEY> [KEY...] <spec...>` | `--profile`, `--allow-new`, `--yes` | Update arbitrary fields; named aliases: `priority`, `labels`, `components`, `fixVersions`, `epic` (set Epic Link via Agile API after the PUT — can be combined with other specs; epic-link failure is non-fatal). Leading args without `=` are keys, first arg with `=` starts specs. |
+|`edit field <KEY> [KEY...] <spec...>`|`--profile`, `--allow-new`, `--yes`|Update arbitrary fields; named aliases: `priority`, `labels`, `components`, `fixVersions`, `epic` (links the Epic Link after the PUT via the Agile API, falling back to a direct PUT of the resolved Epic Link field id when the Agile call hits a screen-validation 400 — can be combined with other specs; combined epic-link failure is non-fatal). Leading args without `=` are keys, first arg with `=` starts specs.|
 | `edit sprint <KEY> [KEY...] <target>` | `--profile`, `--board`, `--yes` | Move issues into a sprint or backlog (dry-run by default; target: numeric id, `current`, `next`, `backlog`) |
 | `board list` | `--profile`, `--project` (required), `--type` (scrum\|kanban), `--limit`, `--page`, `--json`, `--no-cache` | List Agile boards for a project (alias of `lookup boards`) |
 | `board show <id>` | `--profile`, `--project`, `--json`, `--no-cache` | Show board configuration (columns, type) |
@@ -62,7 +62,7 @@ See `ARCHITECTURE.md` for the full design rationale.
 | `add link <source> <target>` | `--profile`, `--type`, `--yes` | Link two issues |
 | `add attachment <KEY> <file...>` | `--profile`, `--yes` | Upload attachments |
 | `delete <ref> [ref...]` | `--profile`, `--yes`, `--with-subtasks` | Delete issues (multi-key OK for plain keys), or single comment/attach/link by compound ref. Aliased as `rm`. Dry-run by default. |
-| `create` | `--profile`, `--init-draft`, `--from-draft`, `--project`, `--type`, `--summary`, `--description`, `--priority`, `--assignee`, `--epic`, `--component`, `--label`, `--fix-version`, `--custom`, `--allow-new`, `--skip-field`, `--no-cache`, `--yes` | Create issue; `--epic <KEY>` links the new issue to the given epic after creation via the Agile API (non-fatal — ⚠ warning printed if link fails, created key always shown) |
+|`create`|`--profile`, `--init-draft`, `--from-draft`, `--project`, `--type`, `--summary`, `--description`, `--priority`, `--assignee`, `--epic`, `--component`, `--label`, `--fix-version`, `--custom`, `--allow-new`, `--skip-field`, `--no-cache`, `--yes`|Create issue; `--epic <KEY>` links the new issue to the given epic after creation via the Agile API, falling back to a direct PUT of the resolved Epic Link field id on a screen-validation 400 (non-fatal — ⚠ warning printed if link fails, created key always shown)|
 
 Full usage details: `docs/` directory.
 

@@ -284,7 +284,7 @@ On `--yes`: executes sequentially, collecting per-key errors rather than abortin
 | `fixVersions` / `versions` | `lookup versions --project <KEY>` (1h cache) |
 | `labels` | `lookup labels --project <KEY>` (5-min cache); bypassed with `--allow-new` |
 | `assignee` | `/user/assignable/search` |
-| `epic` | Issue is linked to the given epic via `POST /rest/agile/1.0/epic/{epicKey}/issue` **after** the PUT completes. Can be combined freely with other field specs — the PUT carries all non-epic fields, then the Agile POST fires. Epic-link failure is non-fatal (⚠ line printed, exit 0). No client-side pre-validation of the epic key. |
+| `epic` | Issue is linked to the given epic **after** the main PUT completes. Two paths in order: (1) `POST /rest/agile/1.0/epic/{epicKey}/issue`; (2) on a screen-validation `400` (some Jira DC instances still enforce screen rules on the Agile path), fall back to `PUT /issue/{key}` with `{"fields":{<resolved Epic Link field id>: epicKey}}`. The Epic Link field id is resolved per-instance via the field list (`"Epic Link"` → e.g. `customfield_11003`), not hardcoded. Can be combined freely with other field specs — the main PUT carries all non-epic fields, then the epic link fires. When `epic=` is the only spec, the dry-run preview names both the Agile POST and the PUT fallback, and epic-link failure exits non-zero. When combined with other fields, epic-link failure is non-fatal (⚠ line printed, exit 0) because the other fields already committed. No client-side pre-validation of the epic key. |
 
 `--allow-new` skips client-side validation for labels and versions, passing the value to the server as-is. For components, `--allow-new` skips the check but Jira itself may reject: component creation requires admin rights. Server-side rejection is surfaced verbatim with a hint to contact a project admin.
 
@@ -469,7 +469,7 @@ Creates a new issue. Dry-run by default.
 | `--description <text>` | Issue description |
 | `--priority <name>` | Priority |
 | `--assignee <user>` | Assignee username or `me` |
-| `--epic <KEY>` | Epic key to link the new issue to after creation, via `POST /rest/agile/1.0/epic/{epicKey}/issue`. Non-fatal: if the Agile link step fails, a ⚠ warning is printed but the created key is always shown and exit code is 0. |
+| `--epic <KEY>` | Epic key to link the new issue to after creation. Tries `POST /rest/agile/1.0/epic/{epicKey}/issue` first, falling back to `PUT /issue/{key}` with the resolved Epic Link field id when the Agile endpoint rejects the link with a screen-validation `400`. Non-fatal: if the link step fails, a ⚠ warning is printed but the created key is always shown and exit code is 0. |
 | `--component <name>` | Component name (repeatable) |
 | `--label <label>` | Label (repeatable) |
 | `--fix-version <v>` | Fix version (repeatable) |

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cgrossde/jiracli/internal/cache"
 )
@@ -31,19 +32,50 @@ func (c *Client) CreateLink(ctx context.Context, linkType, sourceKey, targetKey 
 	return nil
 }
 
-// AddIssuesToEpic moves issues into an epic via the Agile REST API
-// (POST /rest/agile/1.0/epic/{epicKey}/issue). This works on Jira DC even when
-// the Epic Link custom field is not on the create/edit screen, because it does
-// not go through screen-field validation. A successful call returns HTTP 204.
-func (c *Client) AddIssuesToEpic(ctx context.Context, epicKey string, issueKeys []string) error {
+// AddIssuesToEpic moves issues into an epic. It tries two paths in order:
+//
+//  1. POST /rest/agile/1.0/epic/{epicKey}/issue — bypasses screen-field
+//     validation on most Jira DC instances and returns HTTP 204 on success.
+//  2. PUT /rest/api/2/issue/{key} with {"fields":{epicLinkFieldID:epicKey}}
+//     for each issue individually — used as a fallback when the Agile
+//     endpoint returns a screen-validation 400 (some Jira DC configurations
+//     still enforce screen validation on the Agile path).
+//
+// epicLinkFieldID is the resolved custom-field id (e.g. "customfield_10014");
+// pass "" to skip the PUT fallback and surface the Agile error directly.
+func (c *Client) AddIssuesToEpic(ctx context.Context, epicKey string, issueKeys []string, epicLinkFieldID string) error {
 	payload := map[string]any{"issues": issueKeys}
 	data, _ := json.Marshal(payload)
 	respBody, status, err := c.AgilePost(ctx, "/epic/"+epicKey+"/issue", nil, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
-	if status != 204 && status != 200 {
-		return fmt.Errorf("add issue(s) to epic %s: %w", epicKey, MapStatus("", status, respBody))
+	if status == 204 || status == 200 {
+		return nil
+	}
+
+	agileErr := fmt.Errorf("add issue(s) to epic %s: %w", epicKey, MapStatus("", status, respBody))
+
+	// Fallback: PUT the Epic Link custom field directly on each issue.
+	// Required when the Agile endpoint enforces screen-field validation.
+	if epicLinkFieldID == "" {
+		return agileErr
+	}
+	var putErrs []string
+	for _, key := range issueKeys {
+		body := map[string]any{"fields": map[string]any{epicLinkFieldID: epicKey}}
+		raw, _ := json.Marshal(body)
+		putBody, putStatus, putErr := c.Put(ctx, "/issue/"+key, nil, bytes.NewReader(raw), "application/json")
+		if putErr != nil {
+			putErrs = append(putErrs, fmt.Sprintf("%s: %v", key, putErr))
+			continue
+		}
+		if putStatus != 204 && putStatus != 200 {
+			putErrs = append(putErrs, fmt.Sprintf("%s: %v", key, MapStatus("", putStatus, putBody)))
+		}
+	}
+	if len(putErrs) > 0 {
+		return fmt.Errorf("add issue(s) to epic %s: %s", epicKey, strings.Join(putErrs, "; "))
 	}
 	return nil
 }
