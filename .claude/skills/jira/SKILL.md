@@ -228,3 +228,33 @@ Run `jiracli add --help` and `jiracli delete --help` for more.
 **Use `hierarchy` to find where a ticket sits in the hierarchy.** `--parent` only walks one level. When asked which epic, initiative, portfolio item, or any higher-level parent a ticket belongs to — or when mapping a set of tickets up the hierarchy — use `jiracli hierarchy PROJ-123`. It returns the full chain (e.g. Story → Epic → Initiative/Portfolio) in a single call. Do not chain `--parent` calls.
 
 **`effort --group-by` vs `search --count-by`:** use `effort ... --group-by status` when you need time estimates (Planned/Remaining/Spent) broken down by status — via a hierarchy `effort <KEY>` or a result set `effort jql '<query>'`. Use `search --count-by` when you only need counts and percentages and don't need time data. `effort jql` and `search --jql` both take a query; `effort <KEY>` additionally accepts `--depth 2` for two-level breakdowns.
+
+**Descriptions and comments use Jira Wiki Markup, NOT Markdown.** The `--description` and `add comment` fields are rendered by Jira as Wiki Markup. Markdown syntax is silently misrendered — `##` becomes a numbered list heading, `**bold**` may not render, fenced code blocks are ignored. Use Jira Wiki Markup instead:
+
+| Intent | Wiki Markup | NOT Markdown |
+|---|---|---|
+| Heading | `h2. Summary` | `## Summary` |
+| Bold | `*bold*` | `**bold**` |
+| Inline code | `{{code}}` | `` `code` `` |
+| Code block | `{code}...{code}` | ```` ``` ```` |
+| Bullet list | `* item` | `- item` |
+| Numbered list | `# item` | `1. item` |
+| Horizontal rule | `----` | `---` |
+
+Example well-formed description:
+```
+h2. Summary
+Brief description here.
+
+h2. Impact
+* *Office location picker empty* -- {{getCompanyLocations()}} returns null.
+* *Reason codes missing* -- dropdowns empty on out-of-policy bookings.
+
+h2. Root Cause
+The following were deleted from CMA:
+* {{SystemConfigRequest.java}}
+* {{ConcurService.sendSystemConfigRequest()}}
+
+h2. Fix
+Restored the full pipeline (no SDK changes required).
+```
