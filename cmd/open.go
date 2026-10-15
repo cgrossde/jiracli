@@ -32,7 +32,10 @@ Supported reference forms:
   ACME-123:attach:NNN             attachment (fetches filename for URL; single ref only)
   https://host/browse/ACME-123    browse URL
 
-Use --print-url to print the resolved URLs instead of opening them.`,
+Use --print-url to print the resolved URLs instead of opening them.
+
+Set JIRACLI_BROWSER to choose a specific browser, for example:
+  JIRACLI_BROWSER=edge jiracli open ACME-123`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var out strings.Builder

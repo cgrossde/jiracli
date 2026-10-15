@@ -33,8 +33,9 @@ Five steps, each independently idempotent:
 
 **Step 2 — Personal Access Token**
 - Constructs deep link to the instance's PAT management page and prints it.
-- Prompts `Open in browser now? [Y/n]` (default Y). On Y calls `open` (macOS) / `xdg-open` (Linux).
+- Prompts `Open in browser now? [Y/n]` (default Y). On Y opens the OS-default browser; set `JIRACLI_BROWSER` to an executable, command name, or alias such as `edge` to choose a specific Chromium browser.
 - PAT source: `--pat-file` → hidden terminal prompt. Input is never echoed.
+- To force Edge (or another browser), set `JIRACLI_BROWSER=edge` before running `setup` or `open`.
 - Verifies via `GET /rest/api/2/myself`. On 401: "Token rejected — paste again, or hit ENTER to abort." Up to 3 retries.
 - On success: saves `{url, pat, user, displayName, savedAt, insecure?}` to Keychain service `jiracli` under the profile name. Sets that profile as the default if no default exists yet.
 - Short-circuit: stored PAT passes `/myself` probe → `Step 2: ✓ PAT still valid (<displayName>)`. On 401, drops into prompt loop regardless.

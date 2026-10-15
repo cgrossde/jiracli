@@ -961,7 +961,7 @@ No `--json` flag.
 | `ACME-123:comment:9421` | `<baseURL>/browse/ACME-123?focusedCommentId=9421&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel` |
 | `ACME-123:attach:11001` | `<baseURL>/secure/attachment/11001/<url-encoded-filename>` (fetches attachment metadata first to resolve the filename) |
 
-Browser: `open` on macOS, `xdg-open` on Linux. On other OS: prints the URL to stdout with `cannot auto-open on this OS — copy the URL above`.
+Browser: `open` on macOS, `xdg-open` on Linux, and `rundll32` on Windows. Set `JIRACLI_BROWSER` to an executable, command name, or Chromium alias such as `edge`, `chrome`, or `brave` to choose a specific browser. On other OS: prints the URL to stdout with `cannot auto-open on this OS — copy the URL above`.
 
 ### Multi-ref error handling
 
