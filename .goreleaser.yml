@@ -16,9 +16,24 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X github.com/cgrossde/jiracli/cmd.version={{.Version}}
+
+notarize:
+  macos:
+    - enabled: true # mandatory: missing secrets fail the release instead of shipping unsigned binaries
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
 
 archives:
   - formats: [tar.gz]
@@ -50,10 +65,6 @@ homebrew_casks:
       bash: completions/jiracli.bash
       zsh: completions/jiracli.zsh
       fish: completions/jiracli.fish
-    hooks:
-      post:
-        install: |
-          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/jiracli"]
 
 changelog:
   sort: asc
