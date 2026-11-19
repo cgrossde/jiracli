@@ -222,7 +222,24 @@ if strings.HasPrefix(last, `{"_pagination"`) {
 
 ## Authentication and Credentials
 
-Credentials are stored in the macOS Keychain via `internal/keychain`. One generic-password item per named profile.
+Credentials are stored in the macOS Keychain via `internal/keychain`. One generic-password item per named profile, plus `__index__` (profile list) and `__default__` (default profile).
+
+### Who can read the items
+
+`internal/keychain` picks one store per process (`secrets()` in `store.go`):
+
+| Build | Store | Service | Access list |
+|---|---|---|---|
+| Release: valid signature satisfying `identifier "jiracli"` + Developer ID Application, the team ID injected at build time via `-X …/internal/keychain.teamID` (checked at runtime with `SecCodeCheckValidity` on itself) | Security.framework via cgo (`framework_darwin.go`) | `jiracli.bound` | Trusts the jiracli designated requirement only: every signed jiracli version reads silently; any other program, including `/usr/bin/security`, gets the macOS password prompt |
+| Dev (`go build`, ad-hoc or unsigned), `CGO_ENABLED=0`, and `go test` binaries | `/usr/bin/security` CLI (`store_cli.go`) | `jiracli` (legacy) | Trusts `security`, so any process running as the user can read it silently |
+
+Dev builds stay on the CLI because an ad-hoc signature changes with every build, so a bound item would prompt after each rebuild. The release check is a runtime signature check, not a build flag, so it holds only for binaries that can actually keep the binding.
+
+**Migration** (`migratingStore`, release only): reads go to `jiracli.bound`. On a miss, the account is read from the legacy service through `security` (silent, it created the item), written as a bound item, and the legacy item is deleted. Writes go to the bound service and delete any legacy copy (e.g. one recreated by a downgraded version). Deletes remove both.
+
+`security -w` prints secrets containing non-ASCII bytes as hex; `cliStore.get` decodes that form.
+
+Manual signing experiments: `go build -tags keychainselftest -o <dir>/jiracli ./internal/keychain/selftest`, sign it, then `<dir>/jiracli mode|put|get|bound-get|del`. The self-test only touches the throwaway services `jiracli-selftest` and `jiracli-selftest.bound` and is never compiled into release builds.
 
 All commands that require credentials:
 1. Read the `--profile` flag (or equivalent)
@@ -311,7 +328,12 @@ jiracli/
 │   └── skill.go               skill install/uninstall helpers
 ├── internal/
 │   ├── keychain/
-│   │   └── keychain.go        macOS Keychain: save/load/delete/list/default credentials; Entry.HierarchyConfig, Entry.AgileConfig
+│   │   ├── keychain.go        macOS Keychain: save/load/delete/list/default credentials; Entry.HierarchyConfig, Entry.AgileConfig
+│   │   ├── store.go           secretStore seam, release detection, migratingStore (legacy → binary-bound)
+│   │   ├── store_cli.go       cliStore: /usr/bin/security (dev builds, migration source)
+│   │   ├── framework_darwin.go  frameworkStore + selfSatisfies via Security.framework (cgo)
+│   │   ├── framework_other.go   no-cgo stub: always falls back to cliStore
+│   │   └── selftest.go, selftest/  manual signing experiment (build tag keychainselftest only)
 │   └── output/
 │       └── presenter.go       Layer 2: overflow, footer, stderr attachment
 └── ARCHITECTURE.md

@@ -2,30 +2,29 @@
 // Keychain. Each named profile (e.g. a workspace, environment, or account)
 // gets one generic-password item:
 //
-//	service  = <serviceName constant — set to your CLI name>
+//	service  = "jiracli.bound" (signed release) or "jiracli" (dev builds, legacy)
 //	account  = profile name (e.g. "prod", "staging", "myworkspace.example.com")
 //	password = JSON-encoded Entry
 //
 // A second item tracks the set of known profiles:
 //
-//	service  = <serviceName>
+//	service  = same as above
 //	account  = "__index__"
 //	password = JSON-encoded []string of profile names
 //
-// The macOS `security` CLI is used directly — no external Go dependencies.
+// Where the items live is decided once per process by secrets() in store.go:
+// signed release builds keep them under a service bound to the jiracli
+// binary's code identity (migrating legacy items on first read); development
+// builds and tests use the `security` CLI under the legacy service.
 package keychain
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 )
-
-// serviceName is the Keychain service label for all items this CLI stores.
-const serviceName = "jiracli"
 
 const indexAccount = "__index__"
 
@@ -81,15 +80,8 @@ func Save(e Entry) error {
 		return fmt.Errorf("keychain.Save: marshal: %w", err)
 	}
 
-	// -U: update if already exists (idempotent).
-	out, err := run("security", "add-generic-password",
-		"-s", serviceName,
-		"-a", e.Profile,
-		"-w", string(payload),
-		"-U",
-	)
-	if err != nil {
-		return fmt.Errorf("keychain.Save: %w: %s", err, out)
+	if err := secrets().set(e.Profile, string(payload)); err != nil {
+		return fmt.Errorf("keychain.Save: %w", err)
 	}
 
 	if err := indexAdd(e.Profile); err != nil {
@@ -104,16 +96,12 @@ func Load(profile string) (Entry, error) {
 	if profile == "" {
 		return Entry{}, errors.New("keychain.Load: profile must not be empty")
 	}
-	out, err := run("security", "find-generic-password",
-		"-s", serviceName,
-		"-a", profile,
-		"-w",
-	)
+	out, err := secrets().get(profile)
+	if errors.Is(err, ErrNotFound) {
+		return Entry{}, ErrNotFound
+	}
 	if err != nil {
-		if isNotFound(out) {
-			return Entry{}, ErrNotFound
-		}
-		return Entry{}, fmt.Errorf("keychain.Load: %w: %s", err, out)
+		return Entry{}, fmt.Errorf("keychain.Load: %w", err)
 	}
 
 	var e Entry
@@ -129,15 +117,12 @@ func Delete(profile string) error {
 	if profile == "" {
 		return errors.New("keychain.Delete: profile must not be empty")
 	}
-	out, err := run("security", "delete-generic-password",
-		"-s", serviceName,
-		"-a", profile,
-	)
+	err := secrets().del(profile)
+	if errors.Is(err, ErrNotFound) {
+		return ErrNotFound
+	}
 	if err != nil {
-		if isNotFound(out) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("keychain.Delete: %w: %s", err, out)
+		return fmt.Errorf("keychain.Delete: %w", err)
 	}
 
 	if err := indexRemove(profile); err != nil {
@@ -182,29 +167,17 @@ func SetDefault(profile string) error {
 	if profile == "" {
 		return errors.New("keychain.SetDefault: profile must not be empty")
 	}
-	out, err := run("security", "add-generic-password",
-		"-s", serviceName,
-		"-a", defaultAccount,
-		"-w", profile,
-		"-U",
-	)
-	if err != nil {
-		return fmt.Errorf("keychain.SetDefault: %w: %s", err, out)
+	if err := secrets().set(defaultAccount, profile); err != nil {
+		return fmt.Errorf("keychain.SetDefault: %w", err)
 	}
 	return nil
 }
 
 // DeleteDefault removes the stored default profile. No-op if none is set.
 func DeleteDefault() error {
-	out, err := run("security", "delete-generic-password",
-		"-s", serviceName,
-		"-a", defaultAccount,
-	)
-	if err != nil {
-		if isNotFound(out) {
-			return nil
-		}
-		return fmt.Errorf("keychain.DeleteDefault: %w: %s", err, out)
+	err := secrets().del(defaultAccount)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("keychain.DeleteDefault: %w", err)
 	}
 	return nil
 }
@@ -212,16 +185,12 @@ func DeleteDefault() error {
 // GetDefault returns the stored default profile name.
 // Returns ErrNotFound if no default has been set.
 func GetDefault() (string, error) {
-	out, err := run("security", "find-generic-password",
-		"-s", serviceName,
-		"-a", defaultAccount,
-		"-w",
-	)
+	out, err := secrets().get(defaultAccount)
+	if errors.Is(err, ErrNotFound) {
+		return "", ErrNotFound
+	}
 	if err != nil {
-		if isNotFound(out) {
-			return "", ErrNotFound
-		}
-		return "", fmt.Errorf("keychain.GetDefault: %w: %s", err, out)
+		return "", fmt.Errorf("keychain.GetDefault: %w", err)
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -270,16 +239,12 @@ func ResolveDefault() (string, error) {
 // ---------------------------------------------------------------------------
 
 func indexLoad() ([]string, error) {
-	out, err := run("security", "find-generic-password",
-		"-s", serviceName,
-		"-a", indexAccount,
-		"-w",
-	)
+	out, err := secrets().get(indexAccount)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		if isNotFound(out) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("indexLoad: %w: %s", err, out)
+		return nil, fmt.Errorf("indexLoad: %w", err)
 	}
 
 	var profiles []string
@@ -294,14 +259,8 @@ func indexSave(profiles []string) error {
 	if err != nil {
 		return fmt.Errorf("indexSave: marshal: %w", err)
 	}
-	out, err := run("security", "add-generic-password",
-		"-s", serviceName,
-		"-a", indexAccount,
-		"-w", string(payload),
-		"-U",
-	)
-	if err != nil {
-		return fmt.Errorf("indexSave: %w: %s", err, out)
+	if err := secrets().set(indexAccount, string(payload)); err != nil {
+		return fmt.Errorf("indexSave: %w", err)
 	}
 	return nil
 }
@@ -334,22 +293,4 @@ func indexRemove(profile string) error {
 		return nil
 	}
 	return indexSave(filtered)
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func isNotFound(out string) bool {
-	return strings.Contains(out, "could not be found") ||
-		strings.Contains(out, "The specified item could not be found")
-}
-
-// run executes a command and returns combined stdout+stderr and any error.
-func run(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%s: %w", name, err)
-	}
-	return string(out), nil
 }

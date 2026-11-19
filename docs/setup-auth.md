@@ -37,7 +37,7 @@ Five steps, each independently idempotent:
 - PAT source: `--pat-file` → hidden terminal prompt. Input is never echoed.
 - To force Edge (or another browser), set `JIRACLI_BROWSER=edge` before running `setup` or `open`.
 - Verifies via `GET /rest/api/2/myself`. On 401: "Token rejected — paste again, or hit ENTER to abort." Up to 3 retries.
-- On success: saves `{url, pat, user, displayName, savedAt, insecure?}` to Keychain service `jiracli` under the profile name. Sets that profile as the default if no default exists yet.
+- On success: saves `{url, pat, user, displayName, savedAt, insecure?}` to the Keychain under the profile name: service `jiracli.bound` for signed release builds (item readable only by jiracli; other programs get a password prompt), service `jiracli` for development builds. Release builds move existing `jiracli` items to `jiracli.bound` on first use. See ARCHITECTURE.md → Authentication and Credentials. Sets that profile as the default if no default exists yet.
 - Short-circuit: stored PAT passes `/myself` probe → `Step 2: ✓ PAT still valid (<displayName>)`. On 401, drops into prompt loop regardless.
 
 **Step 3 — Hierarchy field discovery**
@@ -64,7 +64,7 @@ Closing banner: `Done! Try: jiracli auth status   or   jiracli show assigned`.
 
 ### Keychain blob
 
-Service `jiracli`, account = profile name. Stored as JSON:
+Service `jiracli.bound` (release) or `jiracli` (dev builds), account = profile name. Stored as JSON:
 
 ```json
 {
