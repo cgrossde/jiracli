@@ -25,7 +25,9 @@ builds:
 
 notarize:
   macos:
-    - enabled: true # mandatory: missing secrets fail the release instead of shipping unsigned binaries
+    # Mandatory for releases: missing or empty secrets fail the build.
+    # Local snapshot builds (goreleaser build --snapshot) skip signing.
+    - enabled: '{{ not .IsSnapshot }}'
       sign:
         certificate: "{{.Env.MACOS_SIGN_P12}}"
         password: "{{.Env.MACOS_SIGN_PASSWORD}}"
